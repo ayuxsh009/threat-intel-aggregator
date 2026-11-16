@@ -6,8 +6,8 @@ import streamlit as st
 from tia import charts
 from tia.report import build_pdf, send_email
 from tia.ui import theme
-from tia.ui.common import (page_link, COLUMN_CONFIG, PAGE_SCAN, display_frame, get_store, risk_counts, session_picker,
-                           summary_pills, username)
+from tia.ui.common import (page_link, PAGE_SCAN, display_frame, get_store, risk_counts, session_picker,
+                           show_table, summary_pills, username)
 
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -16,7 +16,7 @@ theme.page_header("Output", "Reports", "Turn an investigation into a PDF you can
 
 sid, _ = session_picker(store, key="report_session")
 if not sid:
-    theme.empty_state("📄", "Nothing to report yet", "Run a scan first; every scan can become a report.")
+    theme.empty_state("Nothing to report", "Run a scan first. Any investigation can be exported as a PDF.")
     st.write("")
     _, c, _ = st.columns([2, 1, 2])
     page_link(c, PAGE_SCAN, "Start scanning", ":material/radar:")
@@ -38,7 +38,7 @@ with left, st.container(border=True):
             pdf = build_pdf(results, title=title, author=username(), chart_png=png)
         st.session_state[f"pdf_{sid}"] = {"bytes": pdf, "name": f"TI_Report_{datetime.now():%Y%m%d_%H%M%S}.pdf"}
         if include_chart and png is None:
-            st.info("Chart skipped: Kaleido could not find Chrome/Chromium.", icon="ℹ️")
+            st.info("Chart skipped: Kaleido could not find Chrome/Chromium.", icon=":material/info:")
     ready = st.session_state.get(f"pdf_{sid}")
     if ready:
         st.download_button("Download PDF", ready["bytes"], ready["name"], "application/pdf",
@@ -70,5 +70,5 @@ with right, st.container(border=True):
             except Exception as exc:
                 st.error(f"Could not send the email: {exc}")
 
-st.markdown("#### Contents")
-st.dataframe(display_frame(results), hide_index=True, use_container_width=True, column_config=COLUMN_CONFIG)
+st.markdown("**Report contents**")
+show_table(display_frame(results))

@@ -7,8 +7,8 @@ import streamlit as st
 from tia.ioc import parse_list
 from tia.scanner import scan_ioc
 from tia.ui import theme
-from tia.ui.common import (COLUMN_CONFIG, PAGE_INVESTIGATIONS, PAGE_REPORTS, api_keys, csv_bytes, display_frame,
-                           get_store, render_result, source_status, summary_pills, username)
+from tia.ui.common import (PAGE_INVESTIGATIONS, PAGE_REPORTS, api_keys, csv_bytes, display_frame,
+                           get_store, render_result, show_table, source_status, summary_pills, username)
 
 VT_FREE_DELAY = 15.5  # VirusTotal public API: 4 requests per minute
 BIG_BATCH = 100
@@ -17,13 +17,13 @@ store = get_store()
 keys = api_keys(store)
 
 theme.page_header(
-    "Investigate", "Scan indicators",
+    "Investigate", "Scan",
     "Look up IPs, domains, URLs and file hashes across VirusTotal, AbuseIPDB and Shodan. "
-    "Defanged input such as hxxp://evil[.]com is accepted.",
+    "Defanged input (hxxp://, [.]) is accepted.",
 )
 source_status(store)
 if not any(keys.values()):
-    st.warning("No API keys are configured, so every result will be **Unknown**. Add keys in Settings.", icon="🔑")
+    st.warning("No API keys are configured, so every result will be **Unknown**. Add keys in Settings.", icon=":material/key:")
 
 
 def run_batch(iocs: list, kind: str, label: str, use_shodan: bool, pace: bool) -> None:
@@ -61,12 +61,12 @@ def show_batch_result() -> None:
         return
     results = batch["results"]
     st.write("")
-    st.markdown("#### Batch results")
+    st.markdown("**Batch results**")
     summary_pills(results)
-    st.dataframe(display_frame(results), hide_index=True, use_container_width=True, column_config=COLUMN_CONFIG)
+    show_table(display_frame(results))
     failed = sum(1 for r in results if r.get("errors"))
     if failed:
-        st.warning(f"{failed} lookups hit errors (often rate limits). They are marked **Unknown**, not clean.", icon="⚠️")
+        st.warning(f"{failed} lookups hit errors (often rate limits). They are marked **Unknown**, not clean.", icon=":material/warning:")
     c1, c2, c3, _ = st.columns([1, 1, 1, 2])
     c1.download_button("Download CSV", csv_bytes(results), f"scan_{datetime.now():%Y%m%d_%H%M%S}.csv",
                        "text/csv", use_container_width=True, icon=":material/download:")
@@ -82,7 +82,7 @@ with single:
     with st.form("single_scan", border=False):
         c1, c2 = st.columns([5, 1])
         raw = c1.text_input("Indicator", label_visibility="collapsed",
-                            placeholder="185.220.101.8 · evil[.]com · https://… · SHA256 hash")
+                            placeholder="IP, domain, URL or hash, e.g. 198.51.100.23 or evil[.]com")
         go = c2.form_submit_button("Scan", type="primary", use_container_width=True, icon=":material/search:")
     if go:
         if not raw.strip():
@@ -105,7 +105,7 @@ with paste:
     shodan_p, pace_p = batch_options("paste")
     st.caption(f"{len(iocs)} unique indicators detected" if iocs else "Duplicates are removed automatically.")
     if len(iocs) > BIG_BATCH and not pace_p:
-        st.info("Large batch: free API keys will hit rate limits. Consider free-tier pacing.", icon="ℹ️")
+        st.info("Large batch: free API keys will hit rate limits. Consider free-tier pacing.", icon=":material/info:")
     if st.button("Scan list", type="primary", disabled=not iocs, key="scan_paste", icon=":material/play_arrow:"):
         run_batch(iocs, "list", f"Pasted list ({len(iocs)})", shodan_p, pace_p)
 

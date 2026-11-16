@@ -19,7 +19,7 @@ tabs = dict(zip(tab_names, st.tabs(tab_names)))
 with tabs["API keys"]:
     resolved = resolve_keys(store)
     if not is_admin():
-        st.info("Only administrators can change API keys.", icon="🔒")
+        st.info("Only administrators can change API keys.", icon=":material/lock:")
     with st.form("api_keys"):
         new_values = {}
         for key, (label, secret_name, env) in KEY_FIELDS.items():
@@ -39,7 +39,7 @@ with tabs["API keys"]:
         for key, value in new_values.items():
             if resolved[key][1] not in ("secrets", "environment"):
                 store.set_setting(f"apikey.{key}", value.strip())
-        st.toast("API keys saved", icon="✅")
+        st.toast("API keys saved", icon=":material/check:")
         st.rerun()
 
     if st.button("Test connections", icon=":material/network_check:"):
@@ -52,11 +52,11 @@ with tabs["API keys"]:
             }
         for name, res in checks.items():
             if res.get("ok"):
-                st.success(f"{name}: connected", icon="✅")
+                st.success(f"{name}: connected", icon=":material/check_circle:")
             elif res.get("skipped"):
-                st.info(f"{name}: no key configured", icon="➖")
+                st.info(f"{name}: no key configured", icon=":material/remove_circle:")
             else:
-                st.error(f"{name}: {res.get('error')}", icon="❌")
+                st.error(f"{name}: {res.get('error')}", icon=":material/error:")
 
 # -- Users (admin) --------------------------------------------------------
 if "Users" in tabs:
@@ -78,7 +78,7 @@ if "Users" in tabs:
                 else:
                     try:
                         store.add_user(nu.strip(), auth.hash_password(npw), nr)
-                        st.toast(f"Added {nu}", icon="✅")
+                        st.toast(f"Added {nu}", icon=":material/check:")
                         st.rerun()
                     except ValueError as exc:
                         st.error(str(exc))
@@ -101,18 +101,18 @@ if "Users" in tabs:
                         store.set_role(target, new_role)
                         if reset_pw:
                             store.set_password_hash(target, auth.hash_password(reset_pw))
-                        st.toast(f"Updated {target}", icon="✅")
+                        st.toast(f"Updated {target}", icon=":material/check:")
                         st.rerun()
                 if b2.button("Delete user", use_container_width=True, icon=":material/person_remove:"):
                     store.delete_user(target)
-                    st.toast(f"Deleted {target}", icon="🗑️")
+                    st.toast(f"Deleted {target}", icon=":material/delete:")
                     st.rerun()
 
 # -- My account -----------------------------------------------------------
 with tabs["My account"]:
     if me.get("source") != "local":
         st.info("Your account is defined in Streamlit secrets. Change its password there "
-                "(generate a hash with `python -m tia.auth`).", icon="🔐")
+                "(generate a hash with `python -m tia.auth`).", icon=":material/lock:")
     else:
         with st.form("change_password", clear_on_submit=True):
             st.markdown("**Change password**")
@@ -139,7 +139,7 @@ with tabs["About"]:
     st.markdown(
         theme.card(
             "Threat Intel Aggregator",
-            f"<div class='ti-sub' style='margin-bottom:10px'>Unified IOC lookups, risk scoring and reporting for security teams.</div>"
+            "<div class='ti-sub' style='margin-bottom:10px'>Unified IOC lookups, risk scoring and reporting for security teams.</div>"
             + theme.stat("Version", APP_VERSION)
             + theme.stat("Data file", str(db_path()))
             + theme.stat("Sources", "VirusTotal v3 · AbuseIPDB v2 · Shodan")

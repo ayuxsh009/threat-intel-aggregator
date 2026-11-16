@@ -4,8 +4,8 @@ import streamlit as st
 
 from tia.config import RISK_ORDER
 from tia.ui import theme
-from tia.ui.common import (page_link, COLUMN_CONFIG, PAGE_REPORTS, PAGE_SCAN, csv_bytes, display_frame, get_store,
-                           history_scope, is_admin, render_result, session_picker, summary_pills)
+from tia.ui.common import (page_link, PAGE_REPORTS, PAGE_SCAN, csv_bytes, display_frame, get_store,
+                           history_scope, is_admin, render_result, session_picker, show_table, summary_pills)
 
 store = get_store()
 theme.page_header("Investigate", "Investigations",
@@ -13,7 +13,7 @@ theme.page_header("Investigate", "Investigations",
 
 sid, sessions = session_picker(store, key="inv_session")
 if not sid:
-    theme.empty_state("🗂️", "No investigations yet", "Scans you run will show up here.")
+    theme.empty_state("No investigations", "Every scan you run is saved here as an investigation.")
     st.write("")
     _, c, _ = st.columns([2, 1, 2])
     page_link(c, PAGE_SCAN, "Start scanning", ":material/radar:")
@@ -24,7 +24,7 @@ summary_pills(results)
 
 f1, f2, f3 = st.columns([2.2, 1.6, 1.4])
 present = [r for r in RISK_ORDER if any(x.get("risk") == r for x in results)]
-risks = f1.pills("Risk", present, selection_mode="multi", default=present, key=f"risk_{sid}")
+risks = f1.pills("Severity", present, selection_mode="multi", default=present, key=f"risk_{sid}")
 query = f2.text_input("Search", placeholder="Filter indicators…", key=f"q_{sid}")
 types = sorted({r.get("type", "Unknown") for r in results})
 type_sel = f3.multiselect("Type", types, default=types, key=f"type_{sid}")
@@ -36,10 +36,7 @@ filtered = [
     and (not query or query.lower() in str(r.get("ioc", "")).lower())
 ]
 
-event = st.dataframe(
-    display_frame(filtered), hide_index=True, use_container_width=True, column_config=COLUMN_CONFIG,
-    on_select="rerun", selection_mode="single-row", key=f"table_{sid}",
-)
+event = show_table(display_frame(filtered), on_select="rerun", selection_mode="single-row", key=f"table_{sid}")
 st.caption(f"Showing {len(filtered)} of {len(results)} indicators · select a row for full details")
 
 c1, c2, c3, c4 = st.columns(4)

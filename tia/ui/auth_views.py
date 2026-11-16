@@ -32,7 +32,7 @@ def render_login(store: Store) -> None:
     theme.hide_sidebar()
     _, mid, _ = st.columns([1, 1.15, 1])
     with mid:
-        _hero("Welcome back", "Sign in to investigate indicators of compromise.")
+        _hero("Sign in to Threat Intel", "Use your workspace account to continue.")
         locked_for = st.session_state.get("lock_until", 0) - time.time()
         with st.form("login_form"):
             user = st.text_input("Username", placeholder="your.username")
@@ -62,7 +62,7 @@ def render_first_run(store: Store) -> None:
     theme.hide_sidebar()
     _, mid, _ = st.columns([1, 1.15, 1])
     with mid:
-        _hero("Set up your workspace", "Create the administrator account. There are no default passwords.")
+        _hero("Set up your workspace", "Create the administrator account to get started.")
         with st.form("setup_form"):
             user = st.text_input("Admin username", value="admin")
             pw = st.text_input("Password", type="password", help=f"At least {auth.MIN_PASSWORD_LENGTH} characters, letters and numbers.")
@@ -94,7 +94,7 @@ def render_sidebar_user() -> None:
             unsafe_allow_html=True,
         )
         if user.get("insecure"):
-            st.warning("This account uses a plain-text password in secrets. Replace it with a `password_hash`.", icon="⚠️")
+            st.warning("This account uses a plain-text password in secrets. Replace it with a `password_hash`.", icon=":material/warning:")
         if st.button("Sign out", icon=":material/logout:", use_container_width=True, key="sign_out"):
             for k in list(st.session_state.keys()):
                 del st.session_state[k]

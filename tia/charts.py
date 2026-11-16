@@ -11,15 +11,15 @@ FONT = "Inter, 'Segoe UI', system-ui, sans-serif"
 
 
 def _style(fig: go.Figure, *, height: int, print_mode: bool = False, legend: bool = True) -> go.Figure:
-    text = "#0f172a" if print_mode else "#cbd5e1"
-    grid = "#e2e8f0" if print_mode else "rgba(148,163,184,0.12)"
+    text = "#0f172a" if print_mode else "#8b949e"
+    grid = "#e2e8f0" if print_mode else "#21262d"
     bg = "white" if print_mode else "rgba(0,0,0,0)"
     fig.update_layout(
         height=height,
         margin=dict(l=8, r=8, t=36 if legend else 8, b=8),
         paper_bgcolor=bg,
         plot_bgcolor=bg,
-        font=dict(family=FONT, color=text, size=13),
+        font=dict(family=FONT, color=text, size=12),
         showlegend=legend,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, title=None, traceorder="normal"),
         hoverlabel=dict(font_family=FONT),
@@ -46,19 +46,19 @@ def risk_donut(counts: dict, *, print_mode: bool = False, height: int = 320) -> 
         go.Pie(
             labels=labels,
             values=values,
-            hole=0.7,
+            hole=0.72,
             sort=False,
             direction="clockwise",
             marker=dict(colors=[RISK_COLORS[r] for r in labels],
-                        line=dict(color="white" if print_mode else "#0b1020", width=3)),
+                        line=dict(color="white" if print_mode else "#161b22", width=2)),
             textinfo="none",
             hovertemplate="%{label}: %{value} (%{percent})<extra></extra>",
         )
     )
     fig.add_annotation(
-        text=f"<b>{sum(values)}</b><br><span style='font-size:13px'>indicators</span>",
+        text=f"{sum(values)}<br><span style='font-size:12px;color:#8b949e'>indicators</span>",
         showarrow=False,
-        font=dict(size=30, color="#0f172a" if print_mode else "#f1f5f9", family=FONT),
+        font=dict(size=26, color="#0f172a" if print_mode else "#e6edf3", family=FONT),
     )
     return _style(fig, height=height, print_mode=print_mode)
 
@@ -75,7 +75,7 @@ def activity_timeline(df: pd.DataFrame, *, height: int = 320) -> go.Figure:
             for r in RISK_ORDER if r in pivot.columns
         ]
     )
-    fig.update_layout(barmode="stack", bargap=0.45, hovermode="x unified")
+    fig.update_layout(barmode="stack", bargap=0.55, hovermode="x unified")
     fig.update_xaxes(type="date", tickformat="%b %d")
     return _style(fig, height=height)
 
@@ -90,7 +90,7 @@ def top_flagged(df: pd.DataFrame, *, n: int = 10, height: int = 360) -> go.Figur
     fig = go.Figure(
         go.Bar(
             x=d["vt_malicious"], y=labels, orientation="h",
-            marker_color=[RISK_COLORS.get(r, "#6366f1") for r in d["risk"]],
+            marker_color=[RISK_COLORS.get(r, "#2f81f7") for r in d["risk"]],
             text=d["vt_malicious"], textposition="outside", cliponaxis=False,
             customdata=d["ioc"], hovertemplate="%{customdata}<br>%{x} engines<extra></extra>",
         )
@@ -104,7 +104,7 @@ def type_breakdown(df: pd.DataFrame, *, height: int = 360) -> go.Figure:
         return _empty("No data", height)
     counts = df["type"].value_counts()
     fig = go.Figure(
-        go.Bar(x=counts.index, y=counts.values, marker_color="#6366f1",
+        go.Bar(x=counts.index, y=counts.values, marker_color="#2f81f7",
                text=counts.values, textposition="outside", cliponaxis=False,
                hovertemplate="%{x}: %{y}<extra></extra>")
     )

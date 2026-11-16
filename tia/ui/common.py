@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from tia import config
-from tia.config import RISK_COLORS, RISK_ICONS
+from tia.config import RISK_COLORS
 from tia.legacy import import_legacy_files
 from tia.scanner import to_frame
 from tia.storage import Store
@@ -118,10 +118,8 @@ def source_status(store: Store) -> None:
     parts = []
     for key, (value, origin) in resolve_keys(store).items():
         label = KEY_FIELDS[key][0]
-        if value:
-            parts.append(f"<span class='ti-source'><b style='color:#22c55e'>●</b> {label}</span>")
-        else:
-            parts.append(f"<span class='ti-source'><b style='color:#64748b'>○</b> {label} · no key</span>")
+        color, state = ("#3fb950", "connected") if value else ("#6e7681", "not configured")
+        parts.append(f"<span><span class='ti-dot' style='background:{color}'></span>{label} <span style='color:#6e7681'>· {state}</span></span>")
     st.markdown(f"<div class='ti-source-row'>{''.join(parts)}</div>", unsafe_allow_html=True)
 
 
@@ -132,7 +130,7 @@ def display_frame(results: list[dict]) -> pd.DataFrame:
         return df
     return pd.DataFrame(
         {
-            "Risk": [f"{RISK_ICONS.get(r, '')} {r}" for r in df["risk"]],
+            "Severity": df["risk"],
             "Indicator": df["ioc"],
             "Type": df["type"],
             "VT detections": pd.to_numeric(df["vt_malicious"], errors="coerce"),
@@ -146,16 +144,33 @@ def display_frame(results: list[dict]) -> pd.DataFrame:
 
 
 COLUMN_CONFIG = {
-    "Risk": st.column_config.TextColumn("Risk", width="medium"),
+    "Severity": st.column_config.TextColumn("Severity", width="small"),
     "Indicator": st.column_config.TextColumn("Indicator", width="large"),
     "Type": st.column_config.TextColumn("Type", width="small"),
     "VT detections": st.column_config.NumberColumn("VT detections", help="Engines flagging it as malicious", format="%d"),
     "Abuse confidence": st.column_config.ProgressColumn(
-        "Abuse confidence", help="AbuseIPDB confidence score (IPs only)", min_value=0, max_value=100, format="%d%%"
+        "Abuse conf.", help="AbuseIPDB confidence score (IPs only)", min_value=0, max_value=100, format="%d%%"
     ),
-    "Scanned": st.column_config.DatetimeColumn("Scanned", format="MMM D, HH:mm"),
+    "Country": st.column_config.TextColumn("Country", width="small"),
+    "Scanned": st.column_config.DatetimeColumn("Scanned", format="YYYY-MM-DD HH:mm"),
     "Issues": st.column_config.TextColumn("Issues", help="Lookup errors such as rate limits"),
 }
+
+
+def _style_severity(value):
+    color = RISK_COLORS.get(value)
+    return f"color: {color}; font-weight: 600" if color else ""
+
+
+def show_table(df: pd.DataFrame, **kwargs):
+    """st.dataframe with severity-coloured text and the shared column config."""
+    if df.empty:
+        st.caption("No rows.")
+        return None
+    style = df.style
+    apply = style.map if hasattr(style, "map") else style.applymap
+    styler = apply(_style_severity, subset=["Severity"])
+    return st.dataframe(styler, hide_index=True, use_container_width=True, column_config=COLUMN_CONFIG, **kwargs)
 
 
 def csv_bytes(results: list[dict]) -> bytes:
@@ -171,11 +186,11 @@ def risk_counts(results: list[dict]) -> dict[str, int]:
 
 def summary_pills(results: list[dict]) -> None:
     counts = risk_counts(results)
-    pills = " ".join(
-        f"{theme.risk_pill(r)}<span style='margin:0 12px 0 6px;color:#e2e8f0;font-weight:700'>{counts[r]}</span>"
+    pills = "".join(
+        f"{theme.severity(r)}<span class='ti-count'>{counts[r]}</span>"
         for r in config.RISK_ORDER if counts.get(r)
     )
-    st.markdown(f"<div style='margin:.2rem 0 .8rem'>{pills}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='margin:.1rem 0 .9rem'>{pills}</div>", unsafe_allow_html=True)
 
 
 # -- sessions -------------------------------------------------------------
@@ -204,92 +219,123 @@ def session_picker(store: Store, key: str) -> tuple[str | None, list[dict]]:
 
 
 # -- result detail --------------------------------------------------------
+def _level_color(value: int, high: int, medium: int) -> str:
+    if value >= high:
+        return RISK_COLORS["High"]
+    if value >= medium:
+        return RISK_COLORS["Medium"]
+    if value > 0:
+        return RISK_COLORS["Low"]
+    return RISK_COLORS["Legitimate"]
+
+
+def _link(url: str | None, label: str) -> str:
+    return f"<div class='ti-link'><a href='{theme.esc(url)}' target='_blank'>{label} ↗</a></div>" if url else ""
+
+
+def _problem(name: str, result: dict) -> str:
+    tag = "skipped" if result.get("skipped") else "error"
+    return theme.card(name, f"<div class='ti-sub' style='color:#d29922'>{theme.esc(result.get('error'))}</div>", tag)
+
+
 def _vt_card(vt: dict | None) -> str:
-    title = "🧪 VirusTotal"
     if not vt:
-        return theme.card(title, "<div class='ti-sub'>Not queried for this indicator.</div>")
+        return theme.card("VirusTotal", "<div class='ti-sub'>Not queried for this indicator.</div>", "n/a")
     if not vt.get("ok"):
-        return theme.card(title, f"<div class='ti-sub ti-warn'>{theme.esc(vt.get('error'))}</div>")
+        return _problem("VirusTotal", vt)
     if not vt.get("found"):
-        return theme.card(title, "<div class='ti-sub'>No record found on VirusTotal.</div>")
+        return theme.card("VirusTotal", "<div class='ti-sub'>No record of this indicator.</div>", "not found")
     total = vt.get("total") or 0
     mal = vt.get("malicious", 0)
-    color = RISK_COLORS["High"] if mal >= 10 else RISK_COLORS["Medium"] if mal >= 4 else RISK_COLORS["Low"] if mal else RISK_COLORS["Legitimate"]
+    color = _level_color(mal, 10, 4)
     body = (
-        f"<div style='display:flex;align-items:baseline;gap:6px'><span style='font-size:1.8rem;font-weight:800;color:{color}'>{mal}</span>"
-        f"<span class='ti-sub'>/ {total} engines malicious</span></div>"
+        f"<div><span class='ti-big' style='color:{color}'>{mal}</span>"
+        f"<span class='ti-sub'> / {total} security vendors flagged this as malicious</span></div>"
         + theme.bar(mal / total if total else 0, color)
         + theme.stat("Suspicious", vt.get("suspicious", 0))
         + theme.stat("Harmless", vt.get("harmless", 0))
         + theme.stat("Undetected", vt.get("undetected", 0))
-        + theme.stat("Reputation", vt.get("reputation"))
+        + theme.stat("Community reputation", vt.get("reputation"))
     )
     if vt.get("tags"):
         body += "<div style='margin-top:8px'>" + "".join(f"<span class='ti-chip'>{theme.esc(t)}</span>" for t in vt["tags"][:8]) + "</div>"
-    if vt.get("link"):
-        body += f"<div style='margin-top:10px'><a href='{theme.esc(vt['link'])}' target='_blank'>Open in VirusTotal ↗</a></div>"
-    return theme.card(title, body)
+    body += _link(vt.get("link"), "View on VirusTotal")
+    return theme.card("VirusTotal", body, "v3 API")
 
 
 def _abuse_card(abuse: dict | None) -> str:
-    title = "🚩 AbuseIPDB"
     if not abuse:
-        return theme.card(title, "<div class='ti-sub'>Only used for public IP addresses.</div>")
+        return theme.card("AbuseIPDB", "<div class='ti-sub'>Applies to public IP addresses only.</div>", "n/a")
     if not abuse.get("ok"):
-        return theme.card(title, f"<div class='ti-sub ti-warn'>{theme.esc(abuse.get('error'))}</div>")
+        return _problem("AbuseIPDB", abuse)
     c = abuse.get("confidence", 0)
-    color = RISK_COLORS["High"] if c >= 80 else RISK_COLORS["Medium"] if c >= 30 else RISK_COLORS["Low"] if c else RISK_COLORS["Legitimate"]
+    color = _level_color(c, 80, 30)
     body = (
-        f"<div style='display:flex;align-items:baseline;gap:6px'><span style='font-size:1.8rem;font-weight:800;color:{color}'>{c}%</span>"
-        f"<span class='ti-sub'>abuse confidence</span></div>"
+        f"<div><span class='ti-big' style='color:{color}'>{c}%</span>"
+        f"<span class='ti-sub'> confidence of abuse</span></div>"
         + theme.bar(c / 100, color)
         + theme.stat("Reports (90 days)", abuse.get("reports"))
-        + theme.stat("Reporters", abuse.get("distinct_users"))
+        + theme.stat("Distinct reporters", abuse.get("distinct_users"))
         + theme.stat("Whitelisted", "Yes" if abuse.get("whitelisted") else "No")
         + theme.stat("Country", abuse.get("country"))
         + theme.stat("ISP", abuse.get("isp"))
-        + theme.stat("Usage", abuse.get("usage"))
+        + theme.stat("Usage type", abuse.get("usage"))
+        + theme.stat("Last reported", (abuse.get("last_reported") or "")[:19].replace("T", " "))
     )
-    if abuse.get("link"):
-        body += f"<div style='margin-top:10px'><a href='{theme.esc(abuse['link'])}' target='_blank'>Open in AbuseIPDB ↗</a></div>"
-    return theme.card(title, body)
+    body += _link(abuse.get("link"), "View on AbuseIPDB")
+    return theme.card("AbuseIPDB", body, "v2 API")
 
 
 def _shodan_card(sh: dict | None) -> str:
-    title = "🛰️ Shodan"
     if not sh:
-        return theme.card(title, "<div class='ti-sub'>Only used for public IP addresses.</div>")
+        return theme.card("Shodan", "<div class='ti-sub'>Applies to public IP addresses only.</div>", "n/a")
     if not sh.get("ok"):
-        return theme.card(title, f"<div class='ti-sub ti-warn'>{theme.esc(sh.get('error'))}</div>")
+        return _problem("Shodan", sh)
     if not sh.get("found"):
-        return theme.card(title, "<div class='ti-sub'>Shodan has no data for this host.</div>")
-    ports = "".join(f"<span class='ti-chip ti-mono'>{p}</span>" for p in sh.get("ports", [])) or "<span class='ti-sub'>none seen</span>"
+        return theme.card("Shodan", "<div class='ti-sub'>No banner data for this host.</div>", "not found")
+    ports = "".join(f"<span class='ti-chip ti-mono'>{p}</span>" for p in sh.get("ports", [])) or "<span class='ti-sub'>None observed</span>"
+    vulns = sh.get("vulns", [])
     body = (
-        f"<div class='ti-sub' style='margin-bottom:4px'>Open ports</div><div style='margin-bottom:10px'>{ports}</div>"
+        f"<div class='ti-sub' style='margin-bottom:4px'>Open ports ({len(sh.get('ports', []))})</div>"
+        f"<div style='margin-bottom:8px'>{ports}</div>"
         + theme.stat("Organisation", sh.get("org"))
-        + theme.stat("OS", sh.get("os"))
+        + theme.stat("ISP", sh.get("isp"))
+        + theme.stat("Operating system", sh.get("os"))
         + theme.stat("Country", sh.get("country"))
         + theme.stat("Hostnames", ", ".join(sh.get("hostnames", [])[:3]))
-        + theme.stat("Known CVEs", len(sh.get("vulns", [])))
+        + theme.stat("Known CVEs", len(vulns))
+        + theme.stat("Last scanned", (sh.get("last_update") or "")[:10])
     )
-    if sh.get("link"):
-        body += f"<div style='margin-top:10px'><a href='{theme.esc(sh['link'])}' target='_blank'>Open in Shodan ↗</a></div>"
-    return theme.card(title, body)
+    if vulns:
+        body += "<div style='margin-top:6px'>" + "".join(f"<span class='ti-chip ti-mono'>{theme.esc(v)}</span>" for v in vulns[:6]) + "</div>"
+    body += _link(sh.get("link"), "View on Shodan")
+    return theme.card("Shodan", body, "host API")
 
 
 def render_result(result: dict) -> None:
     risk = result.get("risk", "Unknown")
-    reasons = "".join(f"<li>{theme.esc(r)}</li>" for r in result.get("reasons", []))
-    notes = "".join(f"<li>{theme.esc(n)}</li>" for n in result.get("notes", []))
-    errors = "".join(f"<li class='ti-warn'>{theme.esc(e)}</li>" for e in result.get("errors", []) + result.get("skipped", []))
+    sources = [result.get(k) for k in ("vt", "abuse", "shodan") if result.get(k)]
+    answered = sum(1 for s in sources if s.get("ok"))
+    vt = result.get("vt") or {}
+    detections = f"{vt.get('malicious', 0)}/{vt.get('total', 0)}" if vt.get("ok") and vt.get("found") else "—"
+
+    items = "".join(f"<li>{theme.esc(r)}</li>" for r in result.get("reasons", []))
+    items += "".join(f"<li class='ti-note'>{theme.esc(n)}</li>" for n in result.get("notes", []))
+    items += "".join(f"<li class='ti-warn'>{theme.esc(e)}</li>" for e in result.get("errors", []) + result.get("skipped", []))
     shown_input = result.get("input") if result.get("input") and result.get("input") != result.get("ioc") else ""
-    refanged = f" · input <span class='ti-mono'>{theme.esc(shown_input)}</span>" if shown_input else ""
+    refanged = f"<span>Input <b class='ti-mono'>{theme.esc(shown_input)}</b></span>" if shown_input else ""
+
     st.markdown(
-        "<div class='ti-card'><div class='ti-verdict'>"
-        f"{theme.ring(risk)}<div style='flex:1;min-width:240px'>"
+        "<div class='ti-card'><div class='ti-verdict'><div>"
+        f"{theme.severity(risk, large=True)}"
         f"<div class='ti-ioc ti-mono'>{theme.esc(result.get('ioc'))}</div>"
-        f"<div class='ti-meta'>{theme.esc(result.get('type'))} · scanned {theme.esc(str(result.get('timestamp', '')).replace('T', ' '))}{refanged}</div>"
-        f"</div></div><ul class='ti-reasons'>{reasons}{notes}{errors}</ul></div>",
+        "<div class='ti-meta'>"
+        f"<span>Type <b>{theme.esc(result.get('type'))}</b></span>"
+        f"<span>Scanned <b>{theme.esc(str(result.get('timestamp', '')).replace('T', ' '))}</b></span>"
+        f"<span>Sources responded <b>{answered}/{len(sources)}</b></span>{refanged}"
+        "</div></div>"
+        f"<div class='ti-score'><div class='n'>{detections}</div><div class='l'>VT detections</div></div>"
+        f"</div><ul class='ti-reasons'>{items}</ul></div>",
         unsafe_allow_html=True,
     )
     st.write("")
@@ -298,14 +344,14 @@ def render_result(result: dict) -> None:
     c2.markdown(_abuse_card(result.get("abuse")), unsafe_allow_html=True)
     c3.markdown(_shodan_card(result.get("shodan")), unsafe_allow_html=True)
 
-    detections = (result.get("vt") or {}).get("detections") or []
-    if detections:
-        with st.expander(f"Engine detections ({len(detections)})"):
+    vendor_hits = vt.get("detections") or []
+    if vendor_hits:
+        with st.expander(f"Vendor detections ({len(vendor_hits)})"):
             st.dataframe(
-                pd.DataFrame(detections).rename(columns={"engine": "Engine", "category": "Category", "result": "Verdict"}),
+                pd.DataFrame(vendor_hits).rename(columns={"engine": "Vendor", "category": "Category", "result": "Result"}),
                 hide_index=True, use_container_width=True,
             )
-    with st.expander("Raw source data"):
+    with st.expander("Raw API responses"):
         tabs = st.tabs(["VirusTotal", "AbuseIPDB", "Shodan"])
         for tab, field in zip(tabs, ("vt", "abuse", "shodan")):
             with tab:

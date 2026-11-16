@@ -25,17 +25,9 @@ def db_path() -> Path:
 RISK_ORDER = ["High", "Medium", "Low", "Legitimate", "Unknown"]
 
 RISK_COLORS = {
-    "High": "#ef4444",
-    "Medium": "#f97316",
-    "Low": "#eab308",
-    "Legitimate": "#22c55e",
-    "Unknown": "#64748b",
-}
-
-RISK_ICONS = {
-    "High": "🔴",
-    "Medium": "🟠",
-    "Low": "🟡",
-    "Legitimate": "🟢",
-    "Unknown": "⚪",
+    "High": "#f85149",
+    "Medium": "#db6d28",
+    "Low": "#d29922",
+    "Legitimate": "#3fb950",
+    "Unknown": "#8b949e",
 }
