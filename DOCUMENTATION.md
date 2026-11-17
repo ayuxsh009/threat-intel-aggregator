@@ -23,6 +23,7 @@ This document explains what the application does, the technology behind it, wher
 13. [Charts and graphs explained](#13-charts-and-graphs-explained)
 14. [Pages](#14-pages)
 15. [Exports: PDF, CSV, STIX 2.1, block list](#15-exports-pdf-csv-stix-21-block-list)
+15b. [Browser extension and API](#15b-browser-extension-and-api)
 16. [Data model](#16-data-model)
 17. [Accounts and security](#17-accounts-and-security)
 18. [Installation, configuration and deployment](#18-installation-configuration-and-deployment)
@@ -43,6 +44,7 @@ Threat Intel Aggregator is a web application for security analysts. You give it 
 5. Lets analysts **record verdicts** ("confirmed malicious", "false positive") that override the computed result from then on.
 6. **Links related infrastructure** in an interactive graph.
 7. **Exports** results as a PDF report, CSV, a STIX 2.1 bundle or a plain block list.
+8. Shows the score and verdict **for every site you browse** through a Chrome extension backed by your own server.
 
 The point of the app is to produce intelligence that no single source gives on its own: combined evidence, local history, analyst knowledge and relationships between indicators.
 
@@ -67,7 +69,9 @@ The point of the app is to produce intelligence that no single source gives on i
 | Email | **smtplib** (standard library) | Sending PDF reports |
 | STIX | Built by hand with **json** and **uuid** | No extra dependency |
 | Fonts and styling | Inter and JetBrains Mono (Google Fonts), custom CSS | GitHub-style dark theme |
-| Tests | **pytest**, Streamlit **AppTest** | Unit tests and headless UI tests |
+| Extension API | **FastAPI**, **Uvicorn** (`requirements-api.txt`) | HTTP API for the browser extension |
+| Browser extension | Chrome **Manifest V3**, plain JavaScript (no build step) | Badge, corner card, warning bar, popup, settings |
+| Tests | **pytest**, Streamlit **AppTest**, FastAPI **TestClient** (httpx) | Unit, API and headless UI tests |
 
 Exact version ranges are pinned in `requirements.txt`:
 
@@ -135,6 +139,8 @@ threat-intel-aggregator/
 │   ├── verdicts.py            # Analyst verdicts
 │   ├── reports.py             # PDF, email, STIX 2.1, block list
 │   └── settings.py            # API keys, users, my account, about
+├── api/                       # Extension API: server.py (FastAPI), lookup.py (cache + queue), __main__.py (CLI)
+├── extension/                 # Chrome extension (Manifest V3): background, content, popup, options
 ├── tia/                       # Application package
 │   ├── config.py              # Paths, version, severity order and colours
 │   ├── ioc.py                 # Refanging, type detection, list parsing
@@ -149,6 +155,7 @@ threat-intel-aggregator/
 │   ├── charts.py              # Dashboard and analytics charts
 │   ├── report.py              # PDF builder and SMTP email
 │   ├── storage.py             # SQLite store
+│   ├── keys.py                # API key and extension token resolution without Streamlit
 │   ├── auth.py                # Password hashing, validation, login, hash CLI
 │   ├── legacy.py              # One-time import of version 1 JSON files
 │   └── ui/
@@ -579,6 +586,49 @@ The PDF includes the severity donut (print colours, white background), rendered 
 
 ---
 
+## 15b. Browser extension and API
+
+The Chrome extension (`extension/`) shows a score and verdict for every site you browse. It talks to a small FastAPI server (`api/`) that reuses the same scanner, scoring and database as the app.
+
+```
+page load ─▶ background.js ──GET /api/lookup?target=<host>──▶ api/server.py ─▶ api/lookup.py (LookupService)
+   ▲             │ badge                                          │  cached < 24 h? ─▶ answer from the database
+   │             ▼                                                │  else queue ─▶ worker thread ─▶ tia.scanner.scan_ioc
+content.js ◀── result (corner card / warning bar)                 └─ saves to a daily "Browser extension" investigation
+popup.js  ──POST /api/verdict──▶ store.set_verdict ─▶ applies to cached and future results
+```
+
+**API endpoints** (`python -m api`, default `http://127.0.0.1:8600`; interactive docs at `/api/docs`):
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /api/health` | none | Version, which sources have keys, queue length, minimum interval |
+| `GET /api/lookup?target=<url or host>&force=false` | token | Returns `ready` (with the result), `pending` (queue position, ETA, and the previous result if any), `skipped` (with a reason) or `error` |
+| `POST /api/verdict` `{target, verdict: "malicious" \| "benign" \| null, note}` | token | Sets or clears the analyst verdict and returns the updated lookup |
+| `GET /api/auth-check` | token | Lets the extension verify its token |
+
+**Authentication.** Requests carry `X-TI-Token: <token>` (or `Authorization: Bearer <token>`), compared in constant time. The token comes from `TI_API_TOKEN`, then `[api] token` in secrets, then the `api.token` app setting, which is generated (24 random bytes, URL-safe) on first use. `python -m api token` prints it; `python -m api token --new` replaces it; admins can view or regenerate it in **Settings → Browser extension**. CORS only allows `chrome-extension://`, `moz-extension://` and `safari-web-extension://` origins, and the server binds to `127.0.0.1` unless `--host` is given.
+
+**Host normalisation** (`api/lookup.normalize_target`): the URL is reduced to its host name; `www.` is dropped; non-HTTP schemes, private or reserved IPs, `localhost`, single-label names and internal suffixes (`.local`, `.localhost`, `.internal`, `.lan`, `.home`, `.home.arpa`, `.corp`, `.test`, `.invalid`, `.example`) are skipped. The extension applies the same filter before sending anything, plus the user's skip list.
+
+**Caching and rate limiting.** A result younger than 24 hours is returned straight from the database. Otherwise the host joins a queue processed by one background thread. When a VirusTotal key is set, lookups are spaced **15.5 seconds** apart (the free tier allows 4 per minute); without one there is no wait. Shodan is not queried for extension lookups to save quota. The extension's service worker also keeps ready answers for 10 minutes and de-duplicates simultaneous requests. While a host is pending, the card shows "Checking…" (or the previous result marked "refreshing") and re-asks every few seconds.
+
+**Verdicts in the extension.** Every answer is re-scored with the *current* verdict, so marking a site as a false positive turns its cached result green immediately (the badge shows `OK`), and clearing the verdict restores the computed severity.
+
+**What the user sees:**
+
+| Element | Behaviour |
+|---|---|
+| Badge | Score 0–100 coloured by severity; `OK` (analyst marked safe), `?` (unknown), `…` (checking), `!` (setup needed), `×` (server unreachable), blank (not checked) |
+| Corner card | Severity label, score, up to 3 reasons and the domain age if under 180 days. Hides after 6 s (Legitimate/Unknown), 9 s (Low) or 15 s (Medium); hovering keeps it open. Modes: every site, risky sites only (Medium), badge only |
+| Warning bar | For High severity in every mode, even on sites where the card is hidden: score, first reason, **Leave site**, **I understand, continue** |
+| Popup | Severity, score bar, analyst verdict, changes since the last check, reasons, score breakdown, VirusTotal/AbuseIPDB/domain age/registrar/ThreatFox/URLhaus/workspace sightings, verdict buttons with a note, **Re-check now**, link to VirusTotal, **Open app** |
+| Settings | API address (other hosts need an optional permission), token, app address, card mode, skip list, hidden-card list, **Save and test** |
+
+The card and bar are drawn inside a closed shadow DOM, so page styles can't change them and page scripts can't read them. They are built with DOM methods, never `innerHTML`, so result text can't inject markup.
+
+---
+
 ## 16. Data model
 
 SQLite file `data/threatintel.db` (change the folder with `TI_DATA_DIR`), WAL journaling, foreign keys on.
@@ -586,8 +636,8 @@ SQLite file `data/threatintel.db` (change the folder with `TI_DATA_DIR`), WAL jo
 | Table | Columns | Notes |
 |---|---|---|
 | `users` | `username` (primary key, case-insensitive), `password_hash`, `role`, `created_at` | Roles: `admin`, `analyst` |
-| `settings` | `key` (primary key), `value` | API keys saved in the UI (`apikey.vt`, `apikey.abuseipdb`, `apikey.shodan`, `apikey.abusech`) and internal flags |
-| `sessions` | `id`, `username`, `kind`, `label`, `created_at` | One per investigation; `kind` is `single`, `list`, `csv` or `extract` |
+| `settings` | `key` (primary key), `value` | API keys saved in the UI (`apikey.vt`, `apikey.abuseipdb`, `apikey.shodan`, `apikey.abusech`), the extension token (`api.token`) and internal flags |
+| `sessions` | `id`, `username`, `kind`, `label`, `created_at` | One per investigation; `kind` is `single`, `list`, `csv`, `extract` or `extension` (one per day, user `browser`) |
 | `scans` | `id`, `session_id` (cascade delete), `username`, `ioc`, `type`, `risk`, `timestamp`, `data` | `data` holds the full result as JSON. Indexed on session, user and IOC |
 | `verdicts` | `ioc` (primary key), `type`, `verdict` (`malicious` or `benign`), `note`, `username`, `updated_at` | One verdict per indicator; saving again replaces it |
 
@@ -683,19 +733,22 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-Result on 2026-11-17 (Windows 11, Python 3.8.3, Streamlit 1.40.1): **102 passed**.
+Result on 2026-11-18 (Windows 11, Python 3.8.3, Streamlit 1.40.1, FastAPI 0.124): **126 passed**.
 
 | Suite | Tests | Covers |
 |---|---|---|
 | `tests/test_core.py` | 57 | Type detection and refanging; every source rule; VirusTotal, AbuseIPDB and Shodan parsing with mocked HTTP (success, not found, 401, 429 retry and give-up, network error); scanner; hashing, validation and login; sessions and per-user scope; legacy import; PDF with Unicode and many rows; charts; SMTP |
 | `tests/test_intel.py` | 23 | ThreatFox (including `ip:port` matching), URLhaus and RDAP parsing; every score factor and cap; escalation without downgrade; whitelist; feed rules; analyst overrides; sightings and diff; history and verdict storage; scanner with a store; extraction from noisy text; STIX patterns, escaping and labels; block lists; graph clusters, URL-host links and deterministic layout |
-| `tests/test_ui.py` | 22 | First-run setup; login and lockout; every page with and without data; single scan; pasted batch; extract-from-text flow; saving a verdict and seeing it override the next scan; verdicts page; graph page; investigation table; PDF and export downloads; API keys and users; password change; analyst restrictions |
+| `tests/test_api.py` | 23 | Host normalisation and skipping; queue then cache; stale result shown while refreshing; forced re-checks and queue positions; current verdict applied to cached results; worker errors; free-tier interval; health, token check (header and bearer), skip and verdict over HTTP; CORS allowed for extensions only; token generation and precedence |
+| `tests/test_ui.py` | 23 | First-run setup; login and lockout; every page with and without data; single scan; pasted batch; extract-from-text flow; saving a verdict and seeing it override the next scan; verdicts page; graph page; investigation table; PDF and export downloads; API keys and users; password change; browser-extension token tab; analyst restrictions |
 
 Notes:
 
 - No test calls a real API; all sources are mocked. RDAP is stubbed by a fixture because it needs no key.
 - A fixture ignores any real `.streamlit/secrets.toml`, so a developer's own keys and users can't affect results.
 - Streamlit 1.40's AppTest doesn't run pages registered with `st.navigation`, so UI tests run each `views/*.py` file directly with a signed-in session. Navigation was checked separately in headless Chrome with a seeded database: every page loaded with no errors and no failed requests.
+
+The extension itself was tested end to end in Chromium (Playwright with the unpacked extension loaded) against the real API server with faked threat data: settings save and connection test, badges for clean / low / high sites, the corner card, the high-risk warning bar, the popup, and marking a false positive (badge changes to `OK`), with no page errors.
 
 Not covered automatically: live calls with real keys and sending a real email.
 
@@ -708,11 +761,22 @@ Not covered automatically: live calls with real keys and sending a real email.
 - **The score's weights are fixed** in `tia/threatscore.py`. They are a reasoned default, not a trained model.
 - **Stored results don't change** when a verdict is added later; the verdict applies to new scans.
 - **No background rescans:** change detection happens when an indicator is scanned again.
-- **Streamlit Cloud** storage is temporary (see section 18).
+- **Streamlit Cloud** storage is temporary (see section 18), and it can't run the extension API.
+- **Extension lookups are rate limited** by your VirusTotal plan: on a free key, a burst of new sites queues 15.5 s apart.
+- **The extension is loaded unpacked** (developer mode); it is not on the Chrome Web Store.
 
 ---
 
 ## 21. Changelog
+
+### 2.1: browser extension
+
+| Area | Change |
+|---|---|
+| Extension | Chrome Manifest V3 extension: score badge, corner card, high-risk warning bar, popup with verdict buttons, settings with skip list |
+| API | `python -m api`: FastAPI server with token auth, extension-only CORS, 24-hour cache, rate-limited queue, verdict endpoint |
+| App | **Settings → Browser extension** tab to view or regenerate the token; `tia/keys.py` shares key and token resolution between app and API |
+| Tests | 102 → 126, plus an end-to-end browser run |
 
 ### 2.0 → 2.1: intelligence features
 

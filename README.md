@@ -23,6 +23,7 @@
 - [Why this exists](#why-this-exists)
 - [Features](#features)
 - [Screenshots](#screenshots)
+- [Browser extension](#browser-extension)
 - [How it works](#how-it-works)
 - [Risk scoring](#risk-scoring)
 - [Tech stack](#tech-stack)
@@ -63,6 +64,7 @@ Calling three APIs is the easy part. These features produce intelligence that no
 | **Extract from text** | Paste an email, alert or report; every indicator is pulled out (defanged or not) and file names and private IPs are filtered. |
 | **Infrastructure graph** | Indicators linked by shared hosting, malware family, tags and hosts, so one alert reveals the cluster behind it. |
 | **STIX 2.1 and block lists** | Push results into MISP or OpenCTI, or straight into a firewall deny list. |
+| **Chrome extension** | A score badge, corner card and high-risk warning on every site you browse, backed by your own server. |
 
 It's built for SOC analysts, incident responders, students learning threat intelligence, and anyone who triages suspicious indicators.
 
@@ -143,6 +145,46 @@ It's built for SOC analysts, incident responders, students learning threat intel
 | User management |
 |---|
 | ![Settings](docs/screenshots/settings.png) |
+
+---
+
+## Browser extension
+
+A Chrome extension (in [`extension/`](extension/)) shows the threat score and verdict for **every site you visit**, using your own server.
+
+| Every site: corner card | High risk: warning bar |
+|---|---|
+| ![Extension card](docs/screenshots/extension_card.png) | ![Extension warning](docs/screenshots/extension_warning.png) |
+
+| Popup: full breakdown and verdict buttons | Settings |
+|---|---|
+| ![Extension popup](docs/screenshots/extension_popup.png) | ![Extension settings](docs/screenshots/extension_settings.png) |
+
+- **Toolbar badge** with the score on every site, coloured by severity (`OK` = marked safe by an analyst, `?` = unknown, `…` = checking).
+- **Corner card** with severity, score and top reasons; it hides by itself. Choose **every site**, **risky sites only** or **badge only**.
+- **Red warning bar** on high-risk sites, with **Leave site**.
+- **Popup** with the score breakdown, domain age, feed listings, workspace history, and **Mark malicious / False positive / Re-check**.
+
+```
+Chrome extension ──(host name only)──▶ python -m api (FastAPI, 127.0.0.1:8600) ──▶ same scanner + database as the app
+```
+
+**Set up**
+
+```bash
+pip install -r requirements-api.txt
+python -m api                 # prints the extension token
+```
+
+Then open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, choose the `extension` folder, paste the token into the settings page and click **Save and test**. Admins can also copy or regenerate the token in the app under **Settings → Browser extension**.
+
+**Privacy and limits**
+- Only the host name is sent, never full URLs or page content. Local and private addresses and a skip list you control are never checked.
+- Each host is looked up at most once every 24 hours; repeat visits are answered from the database. With a free VirusTotal key, new hosts are queued 15.5 s apart.
+- Results become a daily **Browser extension** investigation in the app, and verdicts set in the extension apply everywhere.
+- The API runs next to the app on your machine or server; Streamlit Cloud can't host it.
+
+See [`extension/README.md`](extension/README.md) for details.
 
 ---
 
@@ -461,6 +503,10 @@ threat-intel-aggregator/
 │   ├── verdicts.py             # Analyst verdicts (allow / block list)
 │   ├── reports.py
 │   └── settings.py
+├── api/                        # FastAPI server for the browser extension (python -m api)
+│   ├── server.py               # Endpoints, token check, CORS
+│   └── lookup.py               # Host normalisation, 24 h cache, rate-limited queue
+├── extension/                  # Chrome extension (Manifest V3)
 ├── tia/                        # Application package
 │   ├── config.py               # Paths, risk levels, colours
 │   ├── ioc.py                  # Refanging, type detection, list parsing
@@ -473,6 +519,7 @@ threat-intel-aggregator/
 │   ├── graph.py                # Infrastructure graph model, layout and figure
 │   ├── scanner.py              # Scan orchestration, table flattening
 │   ├── storage.py              # SQLite persistence (users, scans, verdicts)
+│   ├── keys.py                 # API key and extension token resolution (no Streamlit)
 │   ├── auth.py                 # Password hashing, login, hash CLI
 │   ├── charts.py               # Plotly figures
 │   ├── report.py               # PDF builder, SMTP email
@@ -484,8 +531,9 @@ threat-intel-aggregator/
 ├── .streamlit/
 │   ├── config.toml             # Theme
 │   └── secrets.toml.example    # Secrets template
-├── requirements.txt
-├── requirements-dev.txt
+├── requirements.txt            # App
+├── requirements-api.txt        # App + extension API
+├── requirements-dev.txt        # Everything + test tools
 └── DOCUMENTATION.md            # In-depth technical documentation
 ```
 
@@ -498,11 +546,12 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The suite has **102 tests**:
+The suite has **126 tests**:
 
 - **Core logic (57):** type detection and refanging, every risk rule, the API clients against mocked HTTP (success, not found, invalid key, rate-limit retry, network failure), the scanner, password hashing and login, the database, the version 1 import, and PDF generation including Unicode and multi-page reports.
 - **Intelligence features (23):** ThreatFox, URLhaus and RDAP parsing, every scoring factor and cap, escalation without downgrade, verdict overrides, sightings and change detection, verdict storage, text extraction against noisy input, STIX 2.1 patterns and escaping, block lists, and graph clustering and layout.
-- **UI (22):** first-run setup, login and lockout, every page with and without data, single and batch scans, extraction from text, saving a verdict and seeing it applied on the next scan, the verdicts and graph pages, the investigation table, PDF and export downloads, API key and user management, password change, and analyst restrictions.
+- **Extension API (23):** host normalisation and skipping, the 24-hour cache, the rate-limited queue, stale results while refreshing, forced re-checks, verdicts applied to cached results, worker errors, the token check, CORS limited to extensions, and token precedence.
+- **UI (23):** first-run setup, login and lockout, every page with and without data, single and batch scans, extraction from text, saving a verdict and seeing it applied on the next scan, the verdicts and graph pages, the investigation table, PDF and export downloads, API key and user management, the browser-extension token, password change, and analyst restrictions.
 
 The tests never call the real APIs, so no API keys are needed to run them.
 
@@ -544,7 +593,9 @@ Found a vulnerability? Please open a private security advisory on GitHub rather 
 - [x] Explainable threat score, change detection, analyst verdicts
 - [x] STIX 2.1 and block-list export
 - [ ] More sources (AlienVault OTX, GreyNoise, passive DNS)
+- [x] Chrome extension with per-site score and warnings
 - [ ] Scheduled re-scans of a watchlist with Slack or Teams alerts
+- [ ] Publish the extension on the Chrome Web Store
 - [ ] MISP push via its REST API
 - [ ] Encrypted storage for API keys
 - [ ] Docker image
