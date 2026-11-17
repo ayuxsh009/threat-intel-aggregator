@@ -6,6 +6,9 @@ Each source gives its own level and the IOC takes the most severe one:
 * AbuseIPDB confidence score (IPs only): >=80 High, 30-79 Medium, 1-29 Low,
   0 Legitimate. A whitelisted IP cancels the AbuseIPDB level, but never
   overrides VirusTotal detections.
+* abuse.ch feeds: a ThreatFox match is High (Medium below 50% confidence);
+  a URLhaus listing is High while a URL is online, otherwise Medium. Not being
+  listed in a feed is not evidence of safety, so it never sets a level.
 * If no source returned data (missing keys, errors, rate limits) the verdict
   is "Unknown", never "Legitimate".
 """
@@ -37,7 +40,8 @@ def abuse_level(confidence: int) -> str:
     return "Legitimate"
 
 
-def score(ioc_type: str, vt: dict | None, abuse: dict | None) -> tuple[str, list[str]]:
+def score(ioc_type: str, vt: dict | None, abuse: dict | None,
+          threatfox: dict | None = None, urlhaus: dict | None = None) -> tuple[str, list[str]]:
     """Return (risk, reasons)."""
     levels: list[str] = []
     reasons: list[str] = []
@@ -60,6 +64,19 @@ def score(ioc_type: str, vt: dict | None, abuse: dict | None) -> tuple[str, list
         else:
             levels.append(abuse_level(c))
             reasons.append(f"AbuseIPDB: {c}% abuse confidence from {n} reports")
+
+    if threatfox and threatfox.get("ok") and threatfox.get("found"):
+        conf = threatfox.get("confidence", 0)
+        levels.append("High" if conf >= 50 else "Medium")
+        fam = ", ".join(threatfox.get("families") or []) or "unknown family"
+        reasons.append(f"ThreatFox: listed as {fam} infrastructure ({conf}% confidence)")
+
+    if urlhaus and urlhaus.get("ok") and urlhaus.get("found"):
+        online = urlhaus.get("online", 0)
+        levels.append("High" if online else "Medium")
+        what = ", ".join(urlhaus.get("threats") or []) or "malware distribution"
+        state = f"{online} online now" if online else "none online now"
+        reasons.append(f"URLhaus: {urlhaus.get('count', 0)} malicious URL(s), {state} ({what})")
 
     if not levels:
         return "Unknown", ["No threat-intel source returned data for this indicator"]
