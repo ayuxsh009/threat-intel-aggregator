@@ -35,6 +35,10 @@ with tabs["API keys"]:
             )
             st.caption(f"Source: **{origin}**")
         saved = st.form_submit_button("Save keys", type="primary", disabled=not is_admin())
+    st.caption("Free keys: [VirusTotal](https://www.virustotal.com/gui/join-us) · "
+               "[AbuseIPDB](https://www.abuseipdb.com/register) · [Shodan](https://account.shodan.io/register) · "
+               "[abuse.ch](https://auth.abuse.ch/) (one key covers ThreatFox and URLhaus). "
+               "RDAP domain lookups need no key.")
     if saved and is_admin():
         for key, value in new_values.items():
             if resolved[key][1] not in ("secrets", "environment"):
@@ -49,6 +53,8 @@ with tabs["API keys"]:
                 "VirusTotal": sources.query_virustotal("8.8.8.8", keys["vt"]),
                 "AbuseIPDB": sources.query_abuseipdb("8.8.8.8", keys["abuseipdb"]),
                 "Shodan": sources.query_shodan("8.8.8.8", keys["shodan"]),
+                "abuse.ch (ThreatFox)": sources.query_threatfox("8.8.8.8", "IP", keys["abusech"]),
+                "RDAP": sources.query_rdap("example.com"),
             }
         for name, res in checks.items():
             if res.get("ok"):
@@ -142,8 +148,9 @@ with tabs["About"]:
             "<div class='ti-sub' style='margin-bottom:10px'>Unified IOC lookups, risk scoring and reporting for security teams.</div>"
             + theme.stat("Version", APP_VERSION)
             + theme.stat("Data file", str(db_path()))
-            + theme.stat("Sources", "VirusTotal v3 · AbuseIPDB v2 · Shodan")
-            + theme.stat("Risk rule", "Most severe of VirusTotal and AbuseIPDB levels"),
+            + theme.stat("Sources", "VirusTotal · AbuseIPDB · Shodan · ThreatFox · URLhaus · RDAP")
+            + theme.stat("Severity", "Most severe source verdict, raised by a combined 0-100 score")
+            + theme.stat("Overrides", "Analyst verdicts win over computed results"),
         ),
         unsafe_allow_html=True,
     )

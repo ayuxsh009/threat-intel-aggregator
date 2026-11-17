@@ -36,6 +36,8 @@ pages = {
     "Investigate": [
         st.Page("views/scan.py", title="Scan", icon=":material/radar:"),
         st.Page("views/investigations.py", title="Investigations", icon=":material/manage_search:"),
+        st.Page("views/graph.py", title="Infrastructure graph", icon=":material/hub:"),
+        st.Page("views/verdicts.py", title="Verdicts", icon=":material/gavel:"),
     ],
     "Output": [
         st.Page("views/reports.py", title="Reports", icon=":material/picture_as_pdf:"),

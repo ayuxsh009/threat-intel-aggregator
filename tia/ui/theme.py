@@ -125,6 +125,23 @@ label p { font-size: .85rem !important; color: var(--text-muted) !important; }
 .ti-score { text-align: right; }
 .ti-score .n { font-size: 1.6rem; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
 .ti-score .l { font-size: .72rem; color: var(--text-subtle); text-transform: uppercase; letter-spacing: .05em; }
+.ti-score .n .of { font-size: .85rem; color: var(--text-subtle); font-weight: 500; margin-left: 2px; }
+.ti-override { display: inline-block; margin-left: 8px; padding: 3px 8px; border-radius: 4px; font-size: .72rem;
+  font-weight: 600; color: #a371f7; background: rgba(163,113,247,.1); border: 1px solid rgba(163,113,247,.4); vertical-align: 1px; }
+.ti-changes { margin-top: 10px; padding: 10px 14px; border: 1px solid rgba(47,129,247,.4); background: rgba(47,129,247,.08);
+  border-radius: 8px; font-size: .84rem; color: var(--text); }
+.ti-changes ul { margin: 4px 0 0; padding-left: 18px; }
+.ti-changes li { font-size: .84rem; margin: 2px 0; }
+.ti-factor { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--border-muted); font-size: .82rem; }
+.ti-factor:last-child { border-bottom: none; }
+.ti-factor-pts { min-width: 34px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ti-factor-label { color: var(--text); flex: 1; }
+.ti-factor-src { display: block; color: var(--text-subtle); font-size: .72rem; }
+.ti-feed-hit { font-size: .8rem; font-weight: 600; color: #f85149; margin-bottom: 4px; }
+.ti-section { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--text-subtle);
+  font-weight: 600; margin: 4px 0 2px; }
+.ti-section ~ .ti-section { margin-top: 12px; }
+.ti-chip-risk { border-color: rgba(248,81,73,.5) !important; color: #f85149 !important; }
 
 /* Key/value rows */
 .ti-stat { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; font-size: .82rem; border-bottom: 1px solid var(--border-muted); }

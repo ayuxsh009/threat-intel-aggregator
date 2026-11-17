@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import datetime
 
@@ -11,21 +12,27 @@ import streamlit as st
 from tia import config
 from tia.config import RISK_COLORS
 from tia.legacy import import_legacy_files
-from tia.scanner import to_frame
+from tia.scanner import SOURCE_NAMES, to_frame
 from tia.storage import Store
+from tia.threatscore import RISKY_PORTS, band
 from tia.ui import theme
+
+SOURCE_FIELDS = ("vt", "abuse", "shodan", "threatfox", "urlhaus", "rdap")
 
 # key -> (label, name in [apikeys] secrets, environment variable)
 KEY_FIELDS = {
     "vt": ("VirusTotal", "VT", "VT_API_KEY"),
     "abuseipdb": ("AbuseIPDB", "AbuseIPDB", "ABUSEIPDB_API_KEY"),
     "shodan": ("Shodan", "Shodan", "SHODAN_API_KEY"),
+    "abusech": ("abuse.ch", "AbuseCH", "ABUSECH_API_KEY"),
 }
 
 PAGE_SCAN = "views/scan.py"
 PAGE_INVESTIGATIONS = "views/investigations.py"
 PAGE_REPORTS = "views/reports.py"
 PAGE_SETTINGS = "views/settings.py"
+PAGE_GRAPH = "views/graph.py"
+PAGE_VERDICTS = "views/verdicts.py"
 
 
 def page_link(container, page: str, label: str, icon: str) -> None:
@@ -120,6 +127,7 @@ def source_status(store: Store) -> None:
         label = KEY_FIELDS[key][0]
         color, state = ("#3fb950", "connected") if value else ("#6e7681", "not configured")
         parts.append(f"<span><span class='ti-dot' style='background:{color}'></span>{label} <span style='color:#6e7681'>· {state}</span></span>")
+    parts.append("<span><span class='ti-dot' style='background:#3fb950'></span>RDAP <span style='color:#6e7681'>· no key needed</span></span>")
     st.markdown(f"<div class='ti-source-row'>{''.join(parts)}</div>", unsafe_allow_html=True)
 
 
@@ -131,6 +139,7 @@ def display_frame(results: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "Severity": df["risk"],
+            "Score": pd.to_numeric(df["score"], errors="coerce"),
             "Indicator": df["ioc"],
             "Type": df["type"],
             "VT detections": pd.to_numeric(df["vt_malicious"], errors="coerce"),
@@ -145,6 +154,8 @@ def display_frame(results: list[dict]) -> pd.DataFrame:
 
 COLUMN_CONFIG = {
     "Severity": st.column_config.TextColumn("Severity", width="small"),
+    "Score": st.column_config.ProgressColumn("Score", help="Explainable threat score, 0-100", min_value=0,
+                                             max_value=100, format="%d", width="small"),
     "Indicator": st.column_config.TextColumn("Indicator", width="large"),
     "Type": st.column_config.TextColumn("Type", width="small"),
     "VT detections": st.column_config.NumberColumn("VT detections", help="Engines flagging it as malicious", format="%d"),
@@ -229,6 +240,12 @@ def _level_color(value: int, high: int, medium: int) -> str:
     return RISK_COLORS["Legitimate"]
 
 
+def score_color(points) -> str:
+    if not isinstance(points, int):
+        return RISK_COLORS["Unknown"]
+    return RISK_COLORS[band(points)]
+
+
 def _link(url: str | None, label: str) -> str:
     return f"<div class='ti-link'><a href='{theme.esc(url)}' target='_blank'>{label} ↗</a></div>" if url else ""
 
@@ -236,6 +253,11 @@ def _link(url: str | None, label: str) -> str:
 def _problem(name: str, result: dict) -> str:
     tag = "skipped" if result.get("skipped") else "error"
     return theme.card(name, f"<div class='ti-sub' style='color:#d29922'>{theme.esc(result.get('error'))}</div>", tag)
+
+
+def _chips(values, mono: bool = False) -> str:
+    cls = "ti-chip ti-mono" if mono else "ti-chip"
+    return "".join(f"<span class='{cls}'>{theme.esc(v)}</span>" for v in values)
 
 
 def _vt_card(vt: dict | None) -> str:
@@ -258,7 +280,7 @@ def _vt_card(vt: dict | None) -> str:
         + theme.stat("Community reputation", vt.get("reputation"))
     )
     if vt.get("tags"):
-        body += "<div style='margin-top:8px'>" + "".join(f"<span class='ti-chip'>{theme.esc(t)}</span>" for t in vt["tags"][:8]) + "</div>"
+        body += f"<div style='margin-top:8px'>{_chips(vt['tags'][:8])}</div>"
     body += _link(vt.get("link"), "View on VirusTotal")
     return theme.card("VirusTotal", body, "v3 API")
 
@@ -293,11 +315,16 @@ def _shodan_card(sh: dict | None) -> str:
         return _problem("Shodan", sh)
     if not sh.get("found"):
         return theme.card("Shodan", "<div class='ti-sub'>No banner data for this host.</div>", "not found")
-    ports = "".join(f"<span class='ti-chip ti-mono'>{p}</span>" for p in sh.get("ports", [])) or "<span class='ti-sub'>None observed</span>"
+    ports = sh.get("ports", [])
+    port_chips = "".join(
+        f"<span class='ti-chip ti-mono ti-chip-risk' title='{RISKY_PORTS[p]}'>{p}</span>" if p in RISKY_PORTS
+        else f"<span class='ti-chip ti-mono'>{p}</span>"
+        for p in ports
+    ) or "<span class='ti-sub'>None observed</span>"
     vulns = sh.get("vulns", [])
     body = (
-        f"<div class='ti-sub' style='margin-bottom:4px'>Open ports ({len(sh.get('ports', []))})</div>"
-        f"<div style='margin-bottom:8px'>{ports}</div>"
+        f"<div class='ti-sub' style='margin-bottom:4px'>Open ports ({len(ports)})</div>"
+        f"<div style='margin-bottom:8px'>{port_chips}</div>"
         + theme.stat("Organisation", sh.get("org"))
         + theme.stat("ISP", sh.get("isp"))
         + theme.stat("Operating system", sh.get("os"))
@@ -307,43 +334,190 @@ def _shodan_card(sh: dict | None) -> str:
         + theme.stat("Last scanned", (sh.get("last_update") or "")[:10])
     )
     if vulns:
-        body += "<div style='margin-top:6px'>" + "".join(f"<span class='ti-chip ti-mono'>{theme.esc(v)}</span>" for v in vulns[:6]) + "</div>"
+        body += f"<div style='margin-top:6px'>{_chips(vulns[:6], mono=True)}</div>"
     body += _link(sh.get("link"), "View on Shodan")
     return theme.card("Shodan", body, "host API")
 
 
-def render_result(result: dict) -> None:
+def _factors_card(result: dict) -> str:
+    factors = result.get("factors")
+    points = result.get("score")
+    if factors is None:
+        return theme.card("Threat score", "<div class='ti-sub'>Scanned before scoring was added.</div>", "n/a")
+    color = score_color(points)
+    rows = "".join(
+        "<div class='ti-factor'>"
+        f"<span class='ti-factor-pts' style='color:{RISK_COLORS['Legitimate'] if f['points'] < 0 else color}'>"
+        f"{f['points']:+d}</span><span class='ti-factor-label'>{theme.esc(f['label'])}"
+        f"<span class='ti-factor-src'>{theme.esc(f['source'])}</span></span></div>"
+        for f in factors
+    ) or "<div class='ti-sub'>No risk factors found.</div>"
+    body = (
+        f"<div><span class='ti-big' style='color:{color}'>{points}</span>"
+        f"<span class='ti-sub'> / 100 · {theme.esc(band(points))} band</span></div>"
+        + theme.bar(points / 100, color) + rows
+    )
+    return theme.card("Why this score", body, "explainable")
+
+
+def _feeds_card(result: dict) -> str:
+    tf, uh = result.get("threatfox"), result.get("urlhaus")
+    if not tf and not uh:
+        return theme.card("Threat feeds", "<div class='ti-sub'>Add a free abuse.ch key in Settings to check "
+                          "ThreatFox and URLhaus.</div>", "abuse.ch")
+    body = ""
+    if tf and not tf.get("ok"):
+        body += f"<div class='ti-sub' style='color:#d29922'>{theme.esc(tf.get('error'))}</div>"
+    elif tf:
+        if tf.get("found"):
+            body += ("<div class='ti-feed-hit'>ThreatFox match</div>"
+                     + theme.stat("Malware family", ", ".join(tf.get("families") or []) or "unknown")
+                     + theme.stat("Threat type", ", ".join(tf.get("threat_types") or []))
+                     + theme.stat("Confidence", f"{tf.get('confidence', 0)}%")
+                     + theme.stat("First seen", (tf.get("first_seen") or "")[:10]))
+            body += _link(tf.get("link"), "View on ThreatFox")
+        else:
+            body += theme.stat("ThreatFox", "Not listed")
+    if uh and not uh.get("ok"):
+        body += f"<div class='ti-sub' style='color:#d29922'>{theme.esc(uh.get('error'))}</div>"
+    elif uh:
+        if uh.get("found"):
+            body += ("<div class='ti-feed-hit' style='margin-top:8px'>URLhaus listing</div>"
+                     + theme.stat("Malicious URLs", uh.get("count"))
+                     + theme.stat("Online now", uh.get("online"))
+                     + theme.stat("Threat", ", ".join(uh.get("threats") or []))
+                     + theme.stat("First seen", (uh.get("first_seen") or "")[:10]))
+            body += _link(uh.get("link"), "View on URLhaus")
+        else:
+            body += theme.stat("URLhaus", "Not listed" if not uh.get("note") else uh["note"])
+    return theme.card("Threat feeds", body, "abuse.ch")
+
+
+def _context_card(result: dict) -> str:
+    body = ""
+    rdap = result.get("rdap")
+    if rdap:
+        if not rdap.get("ok"):
+            body += f"<div class='ti-sub' style='color:#d29922'>{theme.esc(rdap.get('error'))}</div>"
+        elif rdap.get("found"):
+            age = rdap.get("age_days")
+            age_txt = f"{age} days" if age is not None else None
+            age_color = RISK_COLORS["High"] if age is not None and age < 30 else (
+                RISK_COLORS["Medium"] if age is not None and age < 180 else None)
+            age_html = (f"<span style='color:{age_color};font-weight:600'>{age_txt}</span>"
+                        if age_color else theme.esc(age_txt or "—"))
+            body += ("<div class='ti-section'>Domain registration</div>"
+                     + theme.stat("Domain", rdap.get("domain"))
+                     + f"<div class='ti-stat'><span>Age</span><span>{age_html}</span></div>"
+                     + theme.stat("Registered", rdap.get("registered"))
+                     + theme.stat("Registrar", rdap.get("registrar"))
+                     + theme.stat("Expires", rdap.get("expires")))
+        else:
+            body += "<div class='ti-section'>Domain registration</div>" + theme.stat("RDAP", "No record")
+
+    seen = result.get("sightings") or {}
+    body += "<div class='ti-section'>Seen in this workspace</div>"
+    if seen.get("count"):
+        body += (theme.stat("Earlier scans", seen["count"])
+                 + theme.stat("Investigations", seen.get("investigations"))
+                 + theme.stat("First seen", str(seen.get("first_seen") or "").replace("T", " ")[:16])
+                 + theme.stat("Last seen", str(seen.get("last_seen") or "").replace("T", " ")[:16])
+                 + theme.stat("Previous severity", seen.get("last_risk"))
+                 + theme.stat("Worst severity", seen.get("worst_risk")))
+    elif "sightings" in result:
+        body += "<div class='ti-sub'>First time this indicator has been seen here.</div>"
+    else:
+        body += "<div class='ti-sub'>Not recorded for this scan.</div>"
+    return theme.card("Context", body, "local intel")
+
+
+def _verdict_control(result: dict, key: str) -> None:
+    ioc = result.get("ioc")
+    if not ioc:
+        return
+    store = get_store()
+    current = store.get_verdict(ioc)
+    options = ["No verdict", "Confirmed malicious", "False positive (benign)"]
+    to_value = {options[1]: "malicious", options[2]: "benign"}
+    index = {"malicious": 1, "benign": 2}.get((current or {}).get("verdict"), 0)
+    label = "Analyst verdict"
+    if current:
+        label += f" · {options[index].split(' (')[0].lower()} by {current.get('username') or 'unknown'}"
+    with st.expander(label, icon=":material/gavel:"):
+        st.caption("Your decision overrides the computed score in every future scan of this indicator.")
+        with st.form(f"verdict_{key}", border=False):
+            choice = st.radio("Verdict", options, index=index, horizontal=True, label_visibility="collapsed")
+            note = st.text_input("Note", value=(current or {}).get("note") or "",
+                                 placeholder="Why? e.g. ticket number, sandbox result, owner confirmed")
+            saved = st.form_submit_button("Save verdict", type="primary")
+        if saved:
+            if choice == options[0]:
+                store.delete_verdict(ioc)
+                st.toast("Verdict cleared", icon=":material/undo:")
+            else:
+                store.set_verdict(ioc, to_value[choice], ioc_type=result.get("type") or "", note=note,
+                                  username=username())
+                st.toast("Verdict saved", icon=":material/gavel:")
+            st.rerun()
+
+
+def render_result(result: dict, key: str = "") -> None:
     risk = result.get("risk", "Unknown")
-    sources = [result.get(k) for k in ("vt", "abuse", "shodan") if result.get(k)]
+    sources = [result.get(k) for k in SOURCE_FIELDS if result.get(k)]
     answered = sum(1 for s in sources if s.get("ok"))
     vt = result.get("vt") or {}
     detections = f"{vt.get('malicious', 0)}/{vt.get('total', 0)}" if vt.get("ok") and vt.get("found") else "—"
+    points = result.get("score")
 
     items = "".join(f"<li>{theme.esc(r)}</li>" for r in result.get("reasons", []))
     items += "".join(f"<li class='ti-note'>{theme.esc(n)}</li>" for n in result.get("notes", []))
     items += "".join(f"<li class='ti-warn'>{theme.esc(e)}</li>" for e in result.get("errors", []) + result.get("skipped", []))
     shown_input = result.get("input") if result.get("input") and result.get("input") != result.get("ioc") else ""
     refanged = f"<span>Input <b class='ti-mono'>{theme.esc(shown_input)}</b></span>" if shown_input else ""
+    verdict = result.get("verdict")
+    badge = "<span class='ti-override'>Analyst override</span>" if verdict else ""
+    score_html = (
+        f"<div class='ti-score'><div class='n' style='color:{score_color(points)}'>{points}"
+        f"<span class='of'>/100</span></div><div class='l'>Threat score</div></div>"
+        if isinstance(points, int) else
+        f"<div class='ti-score'><div class='n'>{detections}</div><div class='l'>VT detections</div></div>"
+    )
 
     st.markdown(
         "<div class='ti-card'><div class='ti-verdict'><div>"
-        f"{theme.severity(risk, large=True)}"
+        f"{theme.severity(risk, large=True)}{badge}"
         f"<div class='ti-ioc ti-mono'>{theme.esc(result.get('ioc'))}</div>"
         "<div class='ti-meta'>"
         f"<span>Type <b>{theme.esc(result.get('type'))}</b></span>"
         f"<span>Scanned <b>{theme.esc(str(result.get('timestamp', '')).replace('T', ' '))}</b></span>"
-        f"<span>Sources responded <b>{answered}/{len(sources)}</b></span>{refanged}"
+        f"<span>Sources responded <b>{answered}/{len(sources)}</b></span>"
+        f"<span>VT detections <b>{detections}</b></span>{refanged}"
         "</div></div>"
-        f"<div class='ti-score'><div class='n'>{detections}</div><div class='l'>VT detections</div></div>"
+        f"{score_html}"
         f"</div><ul class='ti-reasons'>{items}</ul></div>",
         unsafe_allow_html=True,
     )
+    changes = result.get("changes") or []
+    if changes:
+        st.markdown(
+            "<div class='ti-changes'><b>Changed since the last scan</b><ul>"
+            + "".join(f"<li>{theme.esc(c)}</li>" for c in changes) + "</ul></div>",
+            unsafe_allow_html=True,
+        )
     st.write("")
     c1, c2, c3 = st.columns(3)
     c1.markdown(_vt_card(result.get("vt")), unsafe_allow_html=True)
     c2.markdown(_abuse_card(result.get("abuse")), unsafe_allow_html=True)
     c3.markdown(_shodan_card(result.get("shodan")), unsafe_allow_html=True)
+    st.write("")
+    c1, c2, c3 = st.columns(3)
+    c1.markdown(_factors_card(result), unsafe_allow_html=True)
+    c2.markdown(_feeds_card(result), unsafe_allow_html=True)
+    c3.markdown(_context_card(result), unsafe_allow_html=True)
+    st.write("")
 
+    widget_key = key or hashlib.sha1(f"{result.get('ioc')}|{result.get('timestamp')}".encode()).hexdigest()[:10]
+    _verdict_control(result, widget_key)
     vendor_hits = vt.get("detections") or []
     if vendor_hits:
         with st.expander(f"Vendor detections ({len(vendor_hits)})"):
@@ -352,7 +526,7 @@ def render_result(result: dict) -> None:
                 hide_index=True, use_container_width=True,
             )
     with st.expander("Raw API responses"):
-        tabs = st.tabs(["VirusTotal", "AbuseIPDB", "Shodan"])
-        for tab, field in zip(tabs, ("vt", "abuse", "shodan")):
+        names = [SOURCE_NAMES[f] for f in SOURCE_FIELDS]
+        for tab, field in zip(st.tabs(names), SOURCE_FIELDS):
             with tab:
                 st.json(result.get(field) or {"note": "not queried"}, expanded=False)

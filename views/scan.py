@@ -4,6 +4,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
+from tia.extract import extract
 from tia.ioc import parse_list
 from tia.scanner import scan_ioc
 from tia.ui import theme
@@ -18,7 +19,7 @@ keys = api_keys(store)
 
 theme.page_header(
     "Investigate", "Scan",
-    "Look up IPs, domains, URLs and file hashes across VirusTotal, AbuseIPDB and Shodan. "
+    "Look up IPs, domains, URLs and file hashes, or paste a whole email or report to extract them. "
     "Defanged input (hxxp://, [.]) is accepted.",
 )
 source_status(store)
@@ -34,7 +35,7 @@ def run_batch(iocs: list, kind: str, label: str, use_shodan: bool, pace: bool) -
         line = st.empty()
         for i, ioc in enumerate(iocs):
             line.markdown(f"`{ioc}` · {i + 1} of {len(iocs)}")
-            result = scan_ioc(ioc, keys, use_shodan=use_shodan)
+            result = scan_ioc(ioc, keys, use_shodan=use_shodan, store=store)
             store.add_scan(sid, username(), result)  # saved as we go, so a crash keeps partial results
             results.append(result)
             progress.progress((i + 1) / len(iocs))
@@ -76,7 +77,7 @@ def show_batch_result() -> None:
         st.switch_page(PAGE_REPORTS)
 
 
-single, paste, upload = st.tabs(["Single indicator", "Paste a list", "Upload CSV"])
+single, paste, extract_tab, upload = st.tabs(["Single indicator", "Paste a list", "Extract from text", "Upload CSV"])
 
 with single:
     with st.form("single_scan", border=False):
@@ -89,7 +90,7 @@ with single:
             st.warning("Enter an indicator to scan.")
         else:
             with st.spinner("Querying threat-intel sources…"):
-                result = scan_ioc(raw, keys)
+                result = scan_ioc(raw, keys, store=store)
                 sid = store.create_session(username(), "single", result["ioc"])
                 store.add_scan(sid, username(), result)
                 st.session_state["single_result"] = result
@@ -108,6 +109,37 @@ with paste:
         st.info("Large batch: free API keys will hit rate limits. Consider free-tier pacing.", icon=":material/info:")
     if st.button("Scan list", type="primary", disabled=not iocs, key="scan_paste", icon=":material/play_arrow:"):
         run_batch(iocs, "list", f"Pasted list ({len(iocs)})", shodan_p, pace_p)
+
+with extract_tab:
+    st.caption("Paste an email, alert, log excerpt or threat report, or drop a text file. "
+               "Indicators are pulled out automatically; file names and private or reserved IPs are ignored.")
+    doc = st.file_uploader("Text file", type=["txt", "log", "eml", "csv", "json", "md", "html", "xml"],
+                           key="extract_file", label_visibility="collapsed")
+    body = st.text_area("Text", height=200, key="extract_text", label_visibility="collapsed",
+                        placeholder="Paste any text, e.g.\nThe payload was fetched from hxxp://cdn-update[.]top/a.exe "
+                                    "and beaconed to 203.0.113[.]77:443 (SHA256 9f86d0...)")
+    source_text = body
+    if doc is not None:
+        source_text = doc.getvalue().decode("utf-8", errors="ignore") + "\n" + body
+    keep_private = st.toggle("Include private IP addresses", value=False, key="extract_private")
+    found = extract(source_text, include_private=keep_private) if source_text.strip() else []
+    if found:
+        by_type = pd.Series([f["type"] for f in found]).value_counts()
+        st.caption(f"Found {len(found)} indicators · " + " · ".join(f"{n} {t}" for t, n in by_type.items()))
+        picked = st.data_editor(
+            pd.DataFrame({"Scan": True, "Indicator": [f["ioc"] for f in found], "Type": [f["type"] for f in found]}),
+            hide_index=True, use_container_width=True, key="extract_editor",
+            column_config={"Scan": st.column_config.CheckboxColumn(width="small")},
+            disabled=["Indicator", "Type"],
+        )
+        chosen = picked.loc[picked["Scan"], "Indicator"].tolist()
+        shodan_x, pace_x = batch_options("extract")
+        if st.button(f"Scan {len(chosen)} selected", type="primary", disabled=not chosen, key="scan_extract",
+                     icon=":material/play_arrow:"):
+            label = f"Extracted from {doc.name}" if doc is not None else f"Extracted from text ({len(chosen)})"
+            run_batch(chosen, "extract", label, shodan_x, pace_x)
+    elif source_text.strip():
+        st.info("No indicators found in this text.", icon=":material/info:")
 
 with upload:
     file = st.file_uploader("CSV file", type=["csv"], label_visibility="collapsed")

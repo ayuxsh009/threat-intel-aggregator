@@ -4,6 +4,7 @@ from datetime import datetime
 import streamlit as st
 
 from tia import charts
+from tia.export import blocklist, stix_bundle
 from tia.report import build_pdf, send_email
 from tia.ui import theme
 from tia.ui.common import (page_link, PAGE_SCAN, display_frame, get_store, risk_counts, session_picker,
@@ -12,7 +13,8 @@ from tia.ui.common import (page_link, PAGE_SCAN, display_frame, get_store, risk_
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 store = get_store()
-theme.page_header("Output", "Reports", "Turn an investigation into a PDF you can download or email.")
+theme.page_header("Output", "Reports", "Turn an investigation into a PDF, a STIX 2.1 bundle for your TIP, "
+                  "or a block list for firewalls and EDR.")
 
 sid, _ = session_picker(store, key="report_session")
 if not sid:
@@ -69,6 +71,28 @@ with right, st.container(border=True):
                 st.success(f"Report sent to {recipient}.")
             except Exception as exc:
                 st.error(f"Could not send the email: {exc}")
+
+st.write("")
+with st.container(border=True):
+    st.markdown("**Machine-readable exports**")
+    e1, e2 = st.columns([1.4, 1])
+    levels = e1.pills("Include severities", ["High", "Medium", "Low"], selection_mode="multi",
+                      default=["High", "Medium"], key=f"exp_levels_{sid}")
+    chosen = tuple(levels or [])
+    n_selected = len({r.get("ioc") for r in results if r.get("risk") in chosen})
+    e2.caption(f"{n_selected} indicators match")
+    stamp = f"{datetime.now():%Y%m%d_%H%M%S}"
+    b1, b2, _ = st.columns([1, 1, 2])
+    b1.download_button(
+        "STIX 2.1 bundle", stix_bundle(results, risks=chosen, author=username()), f"TI_STIX_{stamp}.json",
+        "application/json", use_container_width=True, icon=":material/data_object:", disabled=not n_selected,
+        help="Imports into MISP, OpenCTI and most threat-intel platforms.", key=f"stix_{sid}",
+    )
+    b2.download_button(
+        "Block list (.txt)", blocklist(results, risks=chosen, title=session.get("label") or "Block list"),
+        f"TI_blocklist_{stamp}.txt", "text/plain", use_container_width=True, icon=":material/block:",
+        disabled=not n_selected, help="One indicator per line, grouped by type.", key=f"block_{sid}",
+    )
 
 st.markdown("**Report contents**")
 show_table(display_frame(results))
