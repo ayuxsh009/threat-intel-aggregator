@@ -1,10 +1,10 @@
 import pandas as pd
 import streamlit as st
 
-from tia import auth, sources
+from tia import auth, keys, sources
 from tia.config import APP_VERSION, db_path
 from tia.ui import theme
-from tia.ui.common import KEY_FIELDS, current_user, get_store, is_admin, resolve_keys, username
+from tia.ui.common import KEY_FIELDS, current_user, extension_token, get_store, is_admin, resolve_keys, username
 
 store = get_store()
 me = current_user()
@@ -13,6 +13,7 @@ theme.page_header("Account", "Settings", "API keys, users and your account.")
 tab_names = ["API keys", "My account", "About"]
 if is_admin():
     tab_names.insert(1, "Users")
+    tab_names.insert(2, "Browser extension")
 tabs = dict(zip(tab_names, st.tabs(tab_names)))
 
 # -- API keys -------------------------------------------------------------
@@ -47,13 +48,13 @@ with tabs["API keys"]:
         st.rerun()
 
     if st.button("Test connections", icon=":material/network_check:"):
-        keys = {k: v for k, (v, _) in resolve_keys(store).items()}
+        active = {k: v for k, (v, _) in resolve_keys(store).items()}
         with st.spinner("Testing with 8.8.8.8…"):
             checks = {
-                "VirusTotal": sources.query_virustotal("8.8.8.8", keys["vt"]),
-                "AbuseIPDB": sources.query_abuseipdb("8.8.8.8", keys["abuseipdb"]),
-                "Shodan": sources.query_shodan("8.8.8.8", keys["shodan"]),
-                "abuse.ch (ThreatFox)": sources.query_threatfox("8.8.8.8", "IP", keys["abusech"]),
+                "VirusTotal": sources.query_virustotal("8.8.8.8", active["vt"]),
+                "AbuseIPDB": sources.query_abuseipdb("8.8.8.8", active["abuseipdb"]),
+                "Shodan": sources.query_shodan("8.8.8.8", active["shodan"]),
+                "abuse.ch (ThreatFox)": sources.query_threatfox("8.8.8.8", "IP", active["abusech"]),
                 "RDAP": sources.query_rdap("example.com"),
             }
         for name, res in checks.items():
@@ -113,6 +114,36 @@ if "Users" in tabs:
                     store.delete_user(target)
                     st.toast(f"Deleted {target}", icon=":material/delete:")
                     st.rerun()
+
+# -- Browser extension (admin) --------------------------------------------
+if "Browser extension" in tabs:
+    with tabs["Browser extension"]:
+        token, origin = extension_token(store)
+        left, right = st.columns([1.3, 1])
+        with left, st.container(border=True):
+            st.markdown("**Connect the Chrome extension**")
+            st.markdown(
+                "1. Start the extension API on this computer: `python -m api` (port 8600).\n"
+                "2. In Chrome open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and "
+                "choose the project's `extension` folder.\n"
+                "3. The extension opens its settings: paste the token below and click **Save and test**."
+            )
+            st.text_input("Extension token", value=token, type="password", disabled=True,
+                          help=f"Source: {origin}. Click the eye icon to reveal it, then copy.")
+            st.caption(f"Token source: **{origin}**")
+            if origin == "app settings" and st.button("Generate a new token", icon=":material/autorenew:"):
+                keys.new_token(store)
+                st.toast("New token generated. Update it in the extension.", icon=":material/key:")
+                st.rerun()
+        with right, st.container(border=True):
+            st.markdown("**What the extension sends**")
+            st.markdown(
+                "- Only the host name of each site (e.g. `example.com`), never full URLs or page content.\n"
+                "- Local and private addresses, browser pages and sites on its skip list are never sent.\n"
+                "- Each host is looked up at most once a day; repeat visits come from this app's database.\n"
+                "- Results are saved as daily **Browser extension** investigations, and analyst verdicts apply."
+            )
+            st.caption("Streamlit Cloud can't run the API. Run it next to the app on your own machine or server.")
 
 # -- My account -----------------------------------------------------------
 with tabs["My account"]:
