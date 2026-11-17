@@ -273,3 +273,17 @@ def test_graph_page_shows_clusters(data_dir):
     at = page(data_dir, "views/graph.py")
     assert len(at.get("plotly_chart")) == 1
     assert len(at.dataframe) == 1
+
+
+def test_settings_browser_extension_tab(data_dir):
+    at = page(data_dir, "views/settings.py")
+    assert "Browser extension" in [t.label for t in at.tabs]
+    assert any(t.label == "Extension token" for t in at.text_input)
+    store = Store(data_dir / "threatintel.db")
+    first = store.get_setting("api.token")
+    assert len(first) >= 24  # generated on first view
+    click(at, "Generate a new token")
+    assert_ok(at)
+    assert store.get_setting("api.token") not in ("", first)
+    at = page(data_dir, "views/settings.py", role="analyst")
+    assert "Browser extension" not in [t.label for t in at.tabs]

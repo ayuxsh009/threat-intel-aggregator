@@ -29,7 +29,7 @@ def ignore_local_secrets(monkeypatch):
 def data_dir(tmp_path, monkeypatch):
     """Point the app at an empty, throwaway data directory."""
     monkeypatch.setenv("TI_DATA_DIR", str(tmp_path / "data"))
-    for var in ("VT_API_KEY", "ABUSEIPDB_API_KEY", "SHODAN_API_KEY", "ABUSECH_API_KEY"):
+    for var in ("VT_API_KEY", "ABUSEIPDB_API_KEY", "SHODAN_API_KEY", "ABUSECH_API_KEY", "TI_API_TOKEN"):
         monkeypatch.delenv(var, raising=False)
     return tmp_path / "data"
 
