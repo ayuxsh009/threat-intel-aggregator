@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Threat Intel: Settings</title>
+  <link rel="stylesheet" href="ui.css">
+  <style>
+    body { padding: 32px 16px; }
+    .wrap { max-width: 640px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 4px; display: flex; gap: 10px; align-items: center; }
+    h1 img { width: 28px; height: 28px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; margin-top: 16px; }
+    .card h2 { font-size: 14px; margin: 0 0 4px; }
+    .hint { color: var(--subtle); font-size: 12px; margin-top: 4px; }
+    .radio { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; color: var(--text); font-size: 13px; }
+    .radio input { margin-top: 3px; }
+    .actions { display: flex; gap: 8px; margin-top: 16px; align-items: center; }
+    #status { font-size: 12px; }
+    .ok { color: #3fb950; } .bad { color: #f85149; }
+    ol { padding-left: 18px; color: var(--muted); } ol li { margin: 4px 0; }
+    code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; color: var(--text); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1><img src="icons/icon48.png" alt="">Threat Intel extension</h1>
+  <div class="muted">Checks every site you visit against your own Threat Intel Aggregator server.</div>
+
+  <div class="card">
+    <h2>1. Connect to your server</h2>
+    <ol>
+      <li>On the computer running the app, start the API: <code>python -m api</code></li>
+      <li>It prints the <b>extension token</b>. Admins can also copy it from the app: <b>Settings → Browser extension</b>.</li>
+      <li>Paste it below and click <b>Save and test</b>.</li>
+    </ol>
+    <label for="apiUrl">API address</label>
+    <input type="url" id="apiUrl" placeholder="http://127.0.0.1:8600">
+    <label for="token">Extension token</label>
+    <input type="password" id="token" placeholder="Paste the token" autocomplete="off">
+    <label for="appUrl">App address (for "Open app")</label>
+    <input type="url" id="appUrl" placeholder="http://localhost:8501">
+  </div>
+
+  <div class="card">
+    <h2>2. On-page card</h2>
+    <div class="hint">High-risk sites always show a red warning bar.</div>
+    <label class="radio"><input type="radio" name="cardMode" value="all"> <span>Every site: show the score in the corner on each site, hiding automatically</span></label>
+    <label class="radio"><input type="radio" name="cardMode" value="risky"> <span>Risky sites only: show the card for Medium risk; warning bar for High</span></label>
+    <label class="radio"><input type="radio" name="cardMode" value="off"> <span>Badge only: just the score on the toolbar icon (High still shows the warning bar)</span></label>
+  </div>
+
+  <div class="card">
+    <h2>3. Privacy</h2>
+    <div class="hint">Only the site's host name (e.g. <code>example.com</code>) is sent to your server, which checks it against
+      VirusTotal, AbuseIPDB, abuse.ch and RDAP using your API keys. Full URLs, page content and form data are never sent.
+      Local and private addresses are never checked.</div>
+    <label for="skipList">Never check these sites (one per line; subdomains included)</label>
+    <textarea id="skipList" placeholder="mybank.com&#10;mail.google.com&#10;intranet.company.com"></textarea>
+    <label for="mutedCards">Card hidden on these sites (still checked; one per line)</label>
+    <textarea id="mutedCards"></textarea>
+  </div>
+
+  <div class="actions">
+    <button class="btn primary" id="save">Save and test</button>
+    <span id="status"></span>
+  </div>
+</div>
+<script src="common.js"></script>
+<script src="options.js"></script>
+</body>
+</html>
