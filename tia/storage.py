@@ -153,6 +153,14 @@ class Store:
             )
         return sid
 
+    def find_session(self, username: str, kind: str, label: str) -> str | None:
+        with self._tx() as c:
+            row = c.execute(
+                "SELECT id FROM sessions WHERE username=? AND kind=? AND label=? ORDER BY created_at DESC LIMIT 1",
+                (username, kind, label),
+            ).fetchone()
+        return row[0] if row else None
+
     def add_scan(self, session_id: str, username: str, result: dict) -> None:
         self.add_scans(session_id, username, [result])
 

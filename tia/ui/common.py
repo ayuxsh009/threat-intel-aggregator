@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import os
 from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
-from tia import config
+from tia import config, keys
+from tia.keys import KEY_FIELDS  # noqa: F401  (re-exported for the pages)
 from tia.config import RISK_COLORS
 from tia.legacy import import_legacy_files
 from tia.scanner import SOURCE_NAMES, to_frame
@@ -19,13 +19,6 @@ from tia.ui import theme
 
 SOURCE_FIELDS = ("vt", "abuse", "shodan", "threatfox", "urlhaus", "rdap")
 
-# key -> (label, name in [apikeys] secrets, environment variable)
-KEY_FIELDS = {
-    "vt": ("VirusTotal", "VT", "VT_API_KEY"),
-    "abuseipdb": ("AbuseIPDB", "AbuseIPDB", "ABUSEIPDB_API_KEY"),
-    "shodan": ("Shodan", "Shodan", "SHODAN_API_KEY"),
-    "abusech": ("abuse.ch", "AbuseCH", "ABUSECH_API_KEY"),
-}
 
 PAGE_SCAN = "views/scan.py"
 PAGE_INVESTIGATIONS = "views/investigations.py"
@@ -103,18 +96,11 @@ def secret_users() -> list[dict]:
 
 def resolve_keys(store: Store) -> dict[str, tuple[str, str]]:
     """API key and where it comes from. Precedence: secrets > environment > app settings."""
-    sec = _secrets_section("apikeys")
-    out = {}
-    for key, (_, secret_name, env) in KEY_FIELDS.items():
-        if sec.get(secret_name):
-            out[key] = (str(sec[secret_name]), "secrets")
-        elif os.environ.get(env):
-            out[key] = (os.environ[env], "environment")
-        elif store.get_setting(f"apikey.{key}"):
-            out[key] = (store.get_setting(f"apikey.{key}"), "app settings")
-        else:
-            out[key] = ("", "not set")
-    return out
+    return keys.resolve(store, _secrets_section("apikeys"))
+
+
+def extension_token(store: Store) -> tuple[str, str]:
+    return keys.api_token(store, {"api": _secrets_section("api")})
 
 
 def api_keys(store: Store) -> dict[str, str]:

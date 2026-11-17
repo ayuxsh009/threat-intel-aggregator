@@ -1,0 +1,4 @@
+-r requirements.txt
+# Browser-extension API server (python -m api)
+fastapi>=0.110,<1
+uvicorn>=0.29,<1
