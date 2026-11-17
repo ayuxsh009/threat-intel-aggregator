@@ -1,4 +1,3 @@
-import os
 import sys
 from pathlib import Path
 
@@ -8,11 +7,29 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
+from tia import sources  # noqa: E402
+
+REAL_QUERY_RDAP = sources.query_rdap
+
+
+@pytest.fixture(autouse=True)
+def no_rdap_network(monkeypatch):
+    """RDAP needs no key, so scans would call it for real; stub it in every test."""
+    monkeypatch.setattr(sources, "query_rdap", lambda domain, **kw: {"ok": True, "found": False, "domain": domain})
+
+
+@pytest.fixture(autouse=True)
+def ignore_local_secrets(monkeypatch):
+    """A developer's real .streamlit/secrets.toml must not leak users or keys into tests."""
+    from tia.ui import common
+    monkeypatch.setattr(common, "_has_secrets", lambda: False)
+
+
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
     """Point the app at an empty, throwaway data directory."""
     monkeypatch.setenv("TI_DATA_DIR", str(tmp_path / "data"))
-    for var in ("VT_API_KEY", "ABUSEIPDB_API_KEY", "SHODAN_API_KEY"):
+    for var in ("VT_API_KEY", "ABUSEIPDB_API_KEY", "SHODAN_API_KEY", "ABUSECH_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     return tmp_path / "data"
 

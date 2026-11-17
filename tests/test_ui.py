@@ -18,7 +18,8 @@ from conftest import ROOT
 
 APP = str(ROOT / "streamlit_app.py")
 PAGES = ["views/dashboard.py", "views/analytics.py", "views/scan.py",
-         "views/investigations.py", "views/reports.py", "views/settings.py"]
+         "views/investigations.py", "views/graph.py", "views/verdicts.py", "views/reports.py",
+         "views/settings.py"]
 
 VT_HIT = {"ok": True, "found": True, "malicious": 14, "suspicious": 1, "harmless": 50, "undetected": 5,
           "total": 70, "detections": [{"engine": "E1", "category": "malicious", "result": "trojan"}], "tags": []}
@@ -166,7 +167,8 @@ def test_reports_generate_pdf(data_dir, patched_sources):
     assert_ok(at)
     pdf = [v for k, v in at.session_state.filtered_state.items() if k.startswith("pdf_")][0]
     assert pdf["bytes"].startswith(b"%PDF")
-    assert any(b.label == "Download PDF" for b in at.get("download_button"))
+    labels = [b.label for b in at.get("download_button")]
+    assert "Download PDF" in labels and "STIX 2.1 bundle" in labels and "Block list (.txt)" in labels
 
 
 def test_settings_save_keys_and_add_user(data_dir):
@@ -205,3 +207,69 @@ def test_analyst_restrictions(data_dir):
     at = page(data_dir, "views/investigations.py", role="analyst")
     assert len(at.dataframe) == 0                       # cannot see another user's scans
     at = page(data_dir, "views/investigations.py", role="admin")
+
+
+def test_extract_from_text_flow(data_dir, patched_sources):
+    at = page(data_dir, "views/scan.py")
+    at.text_area[1].input("Beacon to 185.220.101[.]8, payload hxxp://evil[.]com/a.exe, saw invoice.pdf and 10.1.1.1")
+    at.run()
+    assert_ok(at)
+    button = [b for b in at.button if b.label.startswith("Scan ") and b.label.endswith("selected")][0]
+    assert button.label == "Scan 2 selected"
+    button.click()
+    at.run()
+    assert_ok(at)
+    batch = at.session_state["batch_result"]["results"]
+    assert [r["ioc"] for r in batch] == ["185.220.101.8", "http://evil.com/a.exe"]
+    session = Store(data_dir / "threatintel.db").list_sessions()[0]
+    assert session["kind"] == "extract"
+
+
+def test_verdict_from_result_overrides_next_scan(data_dir, patched_sources):
+    at = page(data_dir, "views/scan.py")
+    at.text_input[0].input("evil.com")
+    click(at, "Scan")
+    assert at.session_state["single_result"]["risk"] == "High"
+    assert isinstance(at.session_state["single_result"]["score"], int)
+    at.radio[0].set_value("False positive (benign)")
+    [t for t in at.text_input if t.label == "Note"][0].input("sinkholed by our team")
+    click(at, "Save verdict")
+    assert_ok(at)
+    store = Store(data_dir / "threatintel.db")
+    assert store.get_verdict("evil.com")["verdict"] == "benign"
+
+    at.text_input[0].input("evil.com")
+    click(at, "Scan")
+    result = at.session_state["single_result"]
+    assert result["risk"] == "Legitimate" and result["sightings"]["count"] == 1
+    assert any("Analyst override" in m.value for m in at.markdown)
+
+
+def test_verdicts_page_add_and_remove(data_dir):
+    at = page(data_dir, "views/verdicts.py")
+    [t for t in at.text_input if t.label == "Indicator"][0].input("bad[.]example")
+    click(at, "Save verdict")
+    assert_ok(at)
+    store = Store(data_dir / "threatintel.db")
+    assert store.get_verdict("bad.example")["verdict"] == "malicious"
+    at = page(data_dir, "views/verdicts.py")
+    assert len(at.dataframe) == 1
+    at.radio[1].set_value("Benign").run()
+    assert_ok(at)
+    assert len(at.dataframe) == 0 and any("No benign verdicts" in c.value for c in at.caption)
+    at.radio[1].set_value("All").run()
+    click(at, "Remove")
+    assert store.get_verdict("bad.example") is None
+
+
+def test_graph_page_shows_clusters(data_dir):
+    store = Store(data_dir / "threatintel.db")
+    sid = store.create_session("tester", "list", "seed")
+    for ip in ("203.0.113.1", "203.0.113.2", "203.0.113.3"):
+        store.add_scan(sid, "tester", {"ioc": ip, "type": "IP", "risk": "High", "score": 80,
+                                       "timestamp": "2026-11-17T10:00:00",
+                                       "shodan": {"ok": True, "found": True, "org": "Bad Hosting", "ports": [],
+                                                  "hostnames": []}})
+    at = page(data_dir, "views/graph.py")
+    assert len(at.get("plotly_chart")) == 1
+    assert len(at.dataframe) == 1
