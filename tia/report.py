@@ -64,7 +64,7 @@ class _ReportPDF(FPDF):
         self.cell(0, 6, f"Page {self.page_no()} of {{nb}}", align="R")
 
 
-_COLS = [("Indicator", 66), ("Type", 18), ("Risk", 24), ("VT", 16), ("Abuse %", 20), ("Scanned", 38)]
+_COLS = [("Indicator", 60), ("Type", 18), ("Risk", 24), ("Score", 14), ("VT", 16), ("Abuse %", 20), ("Scanned", 30)]
 
 
 def _table_header(pdf: _ReportPDF) -> None:
@@ -156,9 +156,10 @@ def build_pdf(results: list[dict], *, title: str, author: str, chart_png: bytes 
         abuse = r.get("abuse") or {}
         risk = r.get("risk", "Unknown")
         cells = [
-            _latin(r.get("ioc"), 34),
+            _latin(r.get("ioc"), 31),
             _latin(r.get("type")),
             risk,
+            str(r["score"]) if isinstance(r.get("score"), int) else "-",
             str(vt.get("malicious", "-")) if vt.get("ok") else "-",
             f"{abuse.get('confidence')}%" if abuse.get("ok") else "-",
             _latin(str(r.get("timestamp", "")).replace("T", " ")[:16]),

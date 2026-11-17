@@ -6,55 +6,89 @@ from datetime import datetime
 
 import pandas as pd
 
-from . import sources
-from .ioc import is_public_ip, normalize
-from .scoring import score
+from urllib.parse import urlsplit
 
-SOURCE_NAMES = {"vt": "VirusTotal", "abuse": "AbuseIPDB", "shodan": "Shodan"}
+from . import intel, sources
+from .ioc import classify, is_public_ip, normalize
+from .threatscore import assess
+
+SOURCE_NAMES = {"vt": "VirusTotal", "abuse": "AbuseIPDB", "shodan": "Shodan",
+                "threatfox": "ThreatFox", "urlhaus": "URLhaus", "rdap": "RDAP"}
+FIELDS = tuple(SOURCE_NAMES)
 
 
-def scan_ioc(raw: str, keys: dict, *, use_shodan: bool = True) -> dict:
+def _domain_for_rdap(ioc: str, kind: str) -> str | None:
+    if kind == "Domain":
+        return ioc
+    if kind == "URL":
+        host = (urlsplit(ioc).hostname or "").lower()
+        if host and classify(host) == "Domain":
+            return host
+    return None
+
+
+def scan_ioc(raw: str, keys: dict, *, use_shodan: bool = True, use_rdap: bool = True, store=None) -> dict:
     """Look up one indicator in every applicable source and score it.
 
-    ``keys`` maps "vt", "abuseipdb" and "shodan" to API keys (may be empty).
+    ``keys`` maps "vt", "abuseipdb", "shodan" and "abusech" to API keys (may be
+    empty). With a ``store``, the scan also uses the workspace's history of the
+    indicator and any analyst verdict.
     """
     ioc, kind = normalize(raw)
     notes: list[str] = []
-    vt = abuse = shodan = None
+    found = dict.fromkeys(FIELDS)
 
     if kind == "IP" and not is_public_ip(ioc):
         notes.append("Private or reserved address: public threat feeds hold no data for it.")
     else:
         if kind == "Unknown":
             notes.append("Unrecognised format; queried VirusTotal as free text.")
-        vt = sources.query_virustotal(ioc, keys.get("vt", ""))
+        found["vt"] = sources.query_virustotal(ioc, keys.get("vt", ""))
         if kind == "IP":
-            abuse = sources.query_abuseipdb(ioc, keys.get("abuseipdb", ""))
+            found["abuse"] = sources.query_abuseipdb(ioc, keys.get("abuseipdb", ""))
             if use_shodan:
-                shodan = sources.query_shodan(ioc, keys.get("shodan", ""))
+                found["shodan"] = sources.query_shodan(ioc, keys.get("shodan", ""))
+        if kind != "Unknown" and keys.get("abusech"):
+            found["threatfox"] = sources.query_threatfox(ioc, kind, keys["abusech"])
+            found["urlhaus"] = sources.query_urlhaus(ioc, kind, keys["abusech"])
+        domain = _domain_for_rdap(ioc, kind)
+        if use_rdap and domain:
+            found["rdap"] = sources.query_rdap(domain)
 
-    risk, reasons = score(kind, vt, abuse)
+    history = store.ioc_history(ioc) if store is not None else []
+    seen = intel.sightings(history)
+    verdict = store.get_verdict(ioc) if store is not None else None
+    verdict_info = {k: verdict[k] for k in ("verdict", "note", "username", "updated_at")} if verdict else None
+
+    outcome = assess(kind, found["vt"], found["abuse"], found["shodan"], found["threatfox"],
+                     found["urlhaus"], found["rdap"], seen, verdict_info)
     errors, skipped = [], []
-    for field, result in (("vt", vt), ("abuse", abuse), ("shodan", shodan)):
+    for field in FIELDS:
+        result = found[field]
         if result and not result.get("ok"):
             (skipped if result.get("skipped") else errors).append(
                 f"{SOURCE_NAMES[field]}: {result.get('error')}"
             )
 
-    return {
+    result = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "input": (raw or "").strip(),
         "ioc": ioc,
         "type": kind,
-        "risk": risk,
-        "reasons": reasons,
+        "risk": outcome["risk"],
+        "rule_risk": outcome["rule_risk"],
+        "score": outcome["score"],
+        "factors": outcome["factors"],
+        "reasons": outcome["reasons"],
         "notes": notes,
         "errors": errors,
         "skipped": skipped,
-        "vt": vt,
-        "abuse": abuse,
-        "shodan": shodan,
+        "verdict": verdict_info,
+        "sightings": seen,
+        **found,
     }
+    result["changes"] = intel.diff(history[0]["result"] if history else None, result)
+    return result
 
 
 def summarize(result: dict) -> dict:
@@ -67,6 +101,7 @@ def summarize(result: dict) -> dict:
         "ioc": result.get("ioc"),
         "type": result.get("type"),
         "risk": result.get("risk", "Unknown"),
+        "score": result.get("score"),
         "vt_malicious": vt.get("malicious") if vt.get("ok") else None,
         "vt_total": vt.get("total") if vt.get("ok") else None,
         "abuse_confidence": abuse.get("confidence") if abuse.get("ok") else None,

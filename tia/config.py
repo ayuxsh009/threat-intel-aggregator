@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "Threat Intel Aggregator"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 ASSETS_DIR = BASE_DIR / "assets"

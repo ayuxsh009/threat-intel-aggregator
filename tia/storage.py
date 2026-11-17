@@ -1,4 +1,4 @@
-"""SQLite persistence for users, settings and scan history.
+"""SQLite persistence for users, settings, scan history and analyst verdicts.
 
 SQLite with WAL journaling handles several browser sessions writing at once,
 which the old shared JSON file could not.
@@ -43,6 +43,15 @@ CREATE TABLE IF NOT EXISTS scans (
 );
 CREATE INDEX IF NOT EXISTS ix_scans_session ON scans(session_id);
 CREATE INDEX IF NOT EXISTS ix_scans_user ON scans(username);
+CREATE INDEX IF NOT EXISTS ix_scans_ioc ON scans(ioc);
+CREATE TABLE IF NOT EXISTS verdicts (
+    ioc        TEXT PRIMARY KEY,
+    type       TEXT,
+    verdict    TEXT NOT NULL CHECK (verdict IN ('malicious', 'benign')),
+    note       TEXT,
+    username   TEXT,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -203,3 +212,43 @@ class Store:
     def clear_history(self, username: str | None = None) -> None:
         with self._tx() as c:
             c.execute("DELETE FROM sessions WHERE (? IS NULL OR username=?)", (username, username))
+
+    # -- local intelligence ---------------------------------------------
+    def ioc_history(self, ioc: str, limit: int = 50) -> list[dict]:
+        """Earlier scans of one indicator across the workspace, newest first."""
+        with self._tx() as c:
+            rows = c.execute(
+                "SELECT sc.session_id, s.label, s.created_at, sc.data FROM scans sc "
+                "JOIN sessions s ON s.id = sc.session_id WHERE sc.ioc=? ORDER BY sc.id DESC LIMIT ?",
+                (ioc, limit),
+            ).fetchall()
+        return [{"session_id": r[0], "label": r[1], "created_at": r[2], "result": json.loads(r[3])} for r in rows]
+
+    # -- analyst verdicts -----------------------------------------------
+    def set_verdict(self, ioc: str, verdict: str, *, ioc_type: str = "", note: str = "", username: str = "") -> None:
+        if verdict not in ("malicious", "benign"):
+            raise ValueError("verdict must be 'malicious' or 'benign'")
+        with self._tx() as c:
+            c.execute(
+                "INSERT INTO verdicts(ioc, type, verdict, note, username, updated_at) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT(ioc) DO UPDATE SET type=excluded.type, verdict=excluded.verdict, "
+                "note=excluded.note, username=excluded.username, updated_at=excluded.updated_at",
+                (ioc, ioc_type, verdict, note.strip(), username, _now()),
+            )
+
+    def get_verdict(self, ioc: str) -> dict | None:
+        with self._tx() as c:
+            row = c.execute("SELECT * FROM verdicts WHERE ioc=?", (ioc,)).fetchone()
+        return dict(row) if row else None
+
+    def list_verdicts(self, verdict: str | None = None) -> list[dict]:
+        with self._tx() as c:
+            rows = c.execute(
+                "SELECT * FROM verdicts WHERE (? IS NULL OR verdict=?) ORDER BY updated_at DESC",
+                (verdict, verdict),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_verdict(self, ioc: str) -> None:
+        with self._tx() as c:
+            c.execute("DELETE FROM verdicts WHERE ioc=?", (ioc,))
